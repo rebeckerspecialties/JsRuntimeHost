@@ -1906,7 +1906,7 @@ napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) 
 
   *result = info->Data();
   info->Data(nullptr);
-  
+
   return napi_ok;
 }
 

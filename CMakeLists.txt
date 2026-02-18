@@ -57,12 +57,6 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-if(APPLE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-arc")
-    if(NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Debug")
-
-    endif()
-endif()
 
 # --------------------------------------------------
 # Options
@@ -121,21 +115,6 @@ set_property(TARGET arcana PROPERTY FOLDER Dependencies)
 if(JSRUNTIMEHOST_POLYFILL_XMLHTTPREQUEST)
     FetchContent_MakeAvailable_With_Message(UrlLib)
     set_property(TARGET UrlLib PROPERTY FOLDER Dependencies)
-    if(APPLE)
-        FetchContent_GetProperties(UrlLib)
-        if(UrlLib_POPULATED)
-            target_compile_options(UrlLib PRIVATE -fobjc-arc)
-            set(_urllib_objc_sources
-                "${UrlLib_SOURCE_DIR}/Source/UrlRequest_Apple.mm"
-                "${UrlLib_SOURCE_DIR}/Source/WebSocket_Apple.mm"
-                "${UrlLib_SOURCE_DIR}/Source/WebSocket_Apple_ObjC.m")
-            foreach(_file IN LISTS _urllib_objc_sources)
-                if(EXISTS "${_file}")
-                    set_source_files_properties("${_file}" PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-                endif()
-            endforeach()
-        endif()
-    endif()
 endif()
 
 if(BABYLON_DEBUG_TRACE)

@@ -1,15 +1,12 @@
-set(STATIC_SCRIPT_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/Scripts/symlink_target.js")
-
-set(GENERATED_SCRIPTS
-    "${JSRUNTIMEHOST_OUTPUT_DIR}/tests.js")
+set(SCRIPTS
+    "Scripts/symlink_target.js"
+    "dist/tests.js")
 
 set(TYPE_SCRIPTS
     "Scripts/tests.ts")
 
 set(SOURCES
     "Shared/Shared.cpp"
-    "CompatibilityTests.cpp"
     "Shared/Shared.h")
 
 if(APPLE)
@@ -25,8 +22,7 @@ if(APPLE)
             "${CMAKE_CURRENT_LIST_DIR}/iOS/Base.lproj/Main.storyboard")
 
         set_source_files_properties(
-            ${STATIC_SCRIPT_SOURCES}
-            ${GENERATED_SCRIPTS}
+            ${SCRIPTS}
             ${TYPE_SCRIPTS}
             PROPERTIES MACOSX_PACKAGE_LOCATION "Scripts")
     else()
@@ -41,7 +37,7 @@ elseif(UNIX AND NOT ANDROID)
         Linux/App.cpp)
 endif()
 
-add_executable(UnitTests ${SOURCES} ${STATIC_SCRIPT_SOURCES} ${GENERATED_SCRIPTS} ${TYPE_SCRIPTS})
+add_executable(UnitTests ${SOURCES} ${SCRIPTS} ${TYPE_SCRIPTS})
 target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_PLATFORM="${JSRUNTIMEHOST_PLATFORM}")
 
 target_link_libraries(UnitTests
@@ -65,34 +61,22 @@ target_link_libraries(UnitTests
 add_custom_command(TARGET UnitTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:UnitTests>>,copy,true> $<TARGET_RUNTIME_DLLS:UnitTests> $<TARGET_FILE_DIR:UnitTests> COMMAND_EXPAND_LISTS)
 
-if(APPLE)
-    enable_objc_arc(UnitTests)
-endif()
-
 if(IOS)
     set_target_properties(UnitTests PROPERTIES
         MACOSX_BUNDLE true
         MACOSX_BUNDLE_INFO_PLIST "${PLIST_FILE}"
         RESOURCE "${STORYBOARD}"
+        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
         XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET ${DEPLOYMENT_TARGET}
         XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "com.jsruntimehost.unittests")
 else()
-    foreach(SCRIPT ${STATIC_SCRIPT_SOURCES})
+    foreach(SCRIPT ${SCRIPTS})
         get_filename_component(SCRIPT_NAME "${SCRIPT}" NAME)
         add_custom_command(
             OUTPUT "${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
+            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
             COMMENT "Copying ${SCRIPT_NAME}"
-            MAIN_DEPENDENCY "${SCRIPT}")
-    endforeach()
-
-    foreach(SCRIPT ${GENERATED_SCRIPTS})
-        get_filename_component(SCRIPT_NAME "${SCRIPT}" NAME)
-        add_custom_command(
-            OUTPUT "${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${SCRIPT}" "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_CFG_INTDIR}/Scripts/${SCRIPT_NAME}"
-            COMMENT "Copying ${SCRIPT_NAME}"
-            MAIN_DEPENDENCY "${SCRIPT}")
+            MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/${SCRIPT}")
     endforeach()
 
     add_custom_command(TARGET UnitTests POST_BUILD
@@ -103,5 +87,5 @@ endif()
 
 set_property(TARGET UnitTests PROPERTY FOLDER Tests)
 
-source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES} ${STATIC_SCRIPT_SOURCES})
+source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${SOURCES} ${SCRIPTS})
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/Scripts PREFIX scripts FILES ${TYPE_SCRIPTS})

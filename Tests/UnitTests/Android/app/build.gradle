@@ -7,12 +7,13 @@ if (project.hasProperty("jsEngine")) {
     jsEngine = project.property("jsEngine")
 }
 
-def targetApiLevel = 35
+def targetApiLevel = 31
+def compileSdkLevel = 34
 def requiredNdkVersion = project.findProperty("ndkVersion") ?: "28.2.13676358"
 
 android {
     namespace 'com.jsruntimehost.unittests'
-    compileSdk targetApiLevel
+    compileSdk compileSdkLevel
     ndkVersion = requiredNdkVersion
 
     defaultConfig {

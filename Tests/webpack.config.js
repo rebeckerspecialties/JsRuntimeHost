@@ -10,9 +10,7 @@ module.exports = {
   },
   output: {
     filename: '[name].js',
-    path: process.env.JSRUNTIMEHOST_BUNDLE_OUTPUT
-      ? path.resolve(process.env.JSRUNTIMEHOST_BUNDLE_OUTPUT)
-      : path.resolve(__dirname, 'UnitTests/dist'),
+    path: path.resolve(__dirname, 'UnitTests/dist'),
   },
   plugins: [
     new webpack.ProvidePlugin({
