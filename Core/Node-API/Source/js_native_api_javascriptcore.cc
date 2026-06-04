@@ -19,6 +19,8 @@ struct napi_callback_info__ {
 };
 
 namespace {
+  // Android JavaScriptCore defines JSChar as unsigned short (not char16_t),
+  // and NDK libc++ doesn't provide char_traits<JSChar>, so we can't use it here.
   size_t jschar_length(const JSChar* str) {
     size_t len = 0;
     while (str[len] != 0) { ++len; }

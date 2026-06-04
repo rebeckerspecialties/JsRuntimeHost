@@ -7,6 +7,9 @@
 
 #include <v8-inspector.h>
 #include <v8-platform.h>
+#if __has_include(<v8-version.h>)
+#include <v8-version.h>
+#endif
 
 #include <string.h>
 #include <chrono>
@@ -194,7 +197,14 @@ namespace Babylon
 
         void ConnectFrontend()
         {
-            session_ = inspector_->connect(1, new ChannelImpl(agent_), v8_inspector::StringView(), v8_inspector::V8Inspector::kFullyTrusted);
+#if defined(V8_MAJOR_VERSION) && (V8_MAJOR_VERSION >= 11)
+            session_ = inspector_->connect(
+                1, new ChannelImpl(agent_), v8_inspector::StringView(),
+                v8_inspector::V8Inspector::kFullyTrusted);
+#else
+            session_ = inspector_->connect(
+                1, new ChannelImpl(agent_), v8_inspector::StringView());
+#endif
         }
 
         void DisconnectFrontend()
@@ -251,6 +261,7 @@ namespace Babylon
 
         double currentTimeMS() override
         {
+            // TODO(separate-pr): Use a monotonic clock (steady/platform monotonic) for suspend/resume-safe inspector timing.
             auto duration = std::chrono::system_clock::now().time_since_epoch();
             return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(duration)
                                            .count());
@@ -359,7 +370,7 @@ namespace Babylon
         script_name_ = appName;
 
         // be sure server_ is not still in use here or its allocation will be replace in the thread func
-        // this can happen if reusing the same AgentImpl object, stopping and restarting before the InspectorSocketServer is properly pulled down 
+        // this can happen if reusing the same AgentImpl object, stopping and restarting before the InspectorSocketServer is properly pulled down
         if (server_) {
             throw std::runtime_error("can't start again the server as previous InspectorSocketServer is still active.");
         }
@@ -371,6 +382,7 @@ namespace Babylon
 
     void AgentImpl::WaitForDebugger()
     {
+        // TODO(separate-pr): Add cancellation/teardown plumbing so this wait cannot block shutdown if no debugger attaches.
         WaitForFrontendMessage();
 
         while (waiting_for_frontend_)
@@ -419,9 +431,10 @@ namespace Babylon
         }
         v8::Local<v8::String> string_value = v8::Local<v8::String>::Cast(value);
         int len = string_value->Length();
-        std::basic_string<char16_t> buffer(len, '\0');
-        string_value->Write(v8::Isolate::GetCurrent(), reinterpret_cast<uint16_t*>(&buffer[0]), 0, len); // Write expects uint16_t* but the template parameter is char16_t
-        return v8_inspector::StringBuffer::create(v8_inspector::StringView(reinterpret_cast<uint16_t*>(buffer.data()), len));
+        std::vector<uint16_t> buffer(len);
+        string_value->Write(v8::Isolate::GetCurrent(), buffer.data(), 0, len);
+        return v8_inspector::StringBuffer::create(
+            v8_inspector::StringView(buffer.data(), len));
     }
 
     bool AgentImpl::AppendMessage(

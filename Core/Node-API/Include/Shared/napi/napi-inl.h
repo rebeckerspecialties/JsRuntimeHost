@@ -19,6 +19,12 @@
 #include <type_traits>
 #include <utility>
 
+#if defined(__clang__) || defined(__GNUC__)
+#define NAPI_NO_SANITIZE_VPTR __attribute__((no_sanitize("vptr")))
+#else
+#define NAPI_NO_SANITIZE_VPTR
+#endif
+
 namespace Napi {
 
 #ifdef NAPI_CPP_CUSTOM_NAMESPACE
@@ -4494,12 +4500,9 @@ inline napi_value InstanceWrap<T>::WrappedMethod(
 ////////////////////////////////////////////////////////////////////////////////
 // ObjectWrap<T> class
 ////////////////////////////////////////////////////////////////////////////////
+
 template <typename T>
-// [BABYLON-NATIVE-ADDITION]
-#ifndef _MSC_VER
-__attribute__((no_sanitize("vptr")))
-#endif
-inline ObjectWrap<T>::ObjectWrap(const Napi::CallbackInfo& callbackInfo) {
+inline NAPI_NO_SANITIZE_VPTR ObjectWrap<T>::ObjectWrap(const Napi::CallbackInfo& callbackInfo) {
   napi_env env = callbackInfo.Env();
   napi_value wrapper = callbackInfo.This();
   napi_status status;
@@ -4513,7 +4516,7 @@ inline ObjectWrap<T>::ObjectWrap(const Napi::CallbackInfo& callbackInfo) {
 }
 
 template <typename T>
-inline ObjectWrap<T>::~ObjectWrap() {
+inline NAPI_NO_SANITIZE_VPTR ObjectWrap<T>::~ObjectWrap() {
   // If the JS object still exists at this point, remove the finalizer added
   // through `napi_wrap()`.
   if (!IsEmpty() && !_finalized) {
@@ -4527,7 +4530,7 @@ inline ObjectWrap<T>::~ObjectWrap() {
 }
 
 template <typename T>
-inline T* ObjectWrap<T>::Unwrap(Object wrapper) {
+inline NAPI_NO_SANITIZE_VPTR T* ObjectWrap<T>::Unwrap(Object wrapper) {
   void* unwrapped;
   napi_status status = napi_unwrap(wrapper.Env(), wrapper, &unwrapped);
   NAPI_THROW_IF_FAILED(wrapper.Env(), status, nullptr);
@@ -6683,5 +6686,7 @@ bool Env::CleanupHook<Hook, Arg>::IsEmpty() const {
 #endif
 
 }  // namespace Napi
+
+#undef NAPI_NO_SANITIZE_VPTR
 
 #endif  // SRC_NAPI_INL_H_
