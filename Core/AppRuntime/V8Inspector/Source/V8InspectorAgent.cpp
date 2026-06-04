@@ -261,6 +261,7 @@ namespace Babylon
 
         double currentTimeMS() override
         {
+            // TODO(separate-pr): Use a monotonic clock (steady/platform monotonic) for suspend/resume-safe inspector timing.
             auto duration = std::chrono::system_clock::now().time_since_epoch();
             return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(duration)
                                            .count());
@@ -381,6 +382,7 @@ namespace Babylon
 
     void AgentImpl::WaitForDebugger()
     {
+        // TODO(separate-pr): Add cancellation/teardown plumbing so this wait cannot block shutdown if no debugger attaches.
         WaitForFrontendMessage();
 
         while (waiting_for_frontend_)
