@@ -7,8 +7,30 @@ if (project.hasProperty("jsEngine")) {
     jsEngine = project.property("jsEngine")
 }
 
+def appMinSdk = jsEngine == "JavaScriptCore" ? 28 : 21
 def nodeApiAssetsDir = "${project.buildDir}/generated/nodeapiassets"
 def enableAsan = project.hasProperty("enableAsan")
+
+def cmakeArguments = [
+    "-DANDROID_STL=c++_shared",
+    "-DNAPI_JAVASCRIPT_ENGINE=${jsEngine}",
+    "-DJSRUNTIMEHOST_CORE_APPRUNTIME_V8_INSPECTOR=ON"
+]
+if (project.hasProperty("jscAndroidRoot")) {
+    cmakeArguments.add("-DJSR_JSC_ANDROID_ROOT=${project.property('jscAndroidRoot')}")
+}
+// Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build
+// time and can't run as NDK-cross-compiled binaries). The JsRuntimeHost CMake
+// bootstraps these host compilers automatically when cross-compiling, so no
+// hand-off is normally required. This property is an optional manual override:
+// pass -PimportHostCompilers=<ImportHostCompilers.cmake> to reuse a prebuilt
+// host-compiler set and skip the in-CMake bootstrap.
+if (project.hasProperty("importHostCompilers")) {
+    cmakeArguments.add("-DIMPORT_HOST_COMPILERS=${project.property('importHostCompilers')}")
+}
+if (enableAsan) {
+    cmakeArguments.add("-DENABLE_SANITIZERS=ON")
+}
 
 android {
     namespace 'com.jsruntimehost.unittests'
@@ -20,7 +42,7 @@ android {
 
     defaultConfig {
         applicationId "com.jsruntimehost.unittests"
-        minSdk 21
+        minSdk appMinSdk
         targetSdk 33
         versionCode 1
         versionName "1.0"
@@ -29,15 +51,7 @@ android {
 
         externalNativeBuild {
             cmake {
-                def cmakeArgs = [
-                    "-DANDROID_STL=c++_shared",
-                    "-DNAPI_JAVASCRIPT_ENGINE=${jsEngine}",
-                    "-DJSRUNTIMEHOST_CORE_APPRUNTIME_V8_INSPECTOR=ON"
-                ]
-                if (enableAsan) {
-                    cmakeArgs += "-DENABLE_SANITIZERS=ON"
-                }
-                arguments(*cmakeArgs)
+                arguments(*cmakeArguments)
             }
         }
 
