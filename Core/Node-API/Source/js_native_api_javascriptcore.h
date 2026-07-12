@@ -8,41 +8,41 @@
 #include <thread>
 #include <cassert>
 
-#if __ANDROID__
-extern "C" void* JSCAndroidAcquireContextLock(JSGlobalContextRef context);
-extern "C" void JSCAndroidReleaseContextLock(void* opaqueLock);
-extern "C" bool JSCAndroidLockContext(JSGlobalContextRef context);
-extern "C" void JSCAndroidUnlockContext(JSGlobalContextRef context);
+#if defined(JSR_USE_BUN_JSC)
+extern "C" void* JSCBunAcquireContextLock(JSGlobalContextRef context);
+extern "C" void JSCBunReleaseContextLock(void* opaqueLock);
+extern "C" bool JSCBunLockContext(JSGlobalContextRef context);
+extern "C" void JSCBunUnlockContext(JSGlobalContextRef context);
 
-class JSCAndroidContextLock final {
+class JSCBunContextLock final {
  public:
-  explicit JSCAndroidContextLock(JSGlobalContextRef context)
-      : lock{JSCAndroidAcquireContextLock(context)} {}
+  explicit JSCBunContextLock(JSGlobalContextRef context)
+      : lock{JSCBunAcquireContextLock(context)} {}
 
-  ~JSCAndroidContextLock() {
-    JSCAndroidReleaseContextLock(lock);
+  ~JSCBunContextLock() {
+    JSCBunReleaseContextLock(lock);
   }
 
-  JSCAndroidContextLock(const JSCAndroidContextLock&) = delete;
-  JSCAndroidContextLock& operator=(const JSCAndroidContextLock&) = delete;
+  JSCBunContextLock(const JSCBunContextLock&) = delete;
+  JSCBunContextLock& operator=(const JSCBunContextLock&) = delete;
 
  private:
   void* lock{};
 };
 
-class JSCAndroidAPILock final {
+class JSCBunAPILock final {
  public:
-  explicit JSCAndroidAPILock(JSGlobalContextRef context)
-      : context{context}, locked{JSCAndroidLockContext(context)} {}
+  explicit JSCBunAPILock(JSGlobalContextRef context, bool acquire = true)
+      : context{context}, locked{acquire && JSCBunLockContext(context)} {}
 
-  ~JSCAndroidAPILock() {
+  ~JSCBunAPILock() {
     if (locked) {
-      JSCAndroidUnlockContext(context);
+      JSCBunUnlockContext(context);
     }
   }
 
-  JSCAndroidAPILock(const JSCAndroidAPILock&) = delete;
-  JSCAndroidAPILock& operator=(const JSCAndroidAPILock&) = delete;
+  JSCBunAPILock(const JSCBunAPILock&) = delete;
+  JSCBunAPILock& operator=(const JSCBunAPILock&) = delete;
 
  private:
   JSGlobalContextRef context{};
@@ -73,8 +73,8 @@ struct napi_env__ {
   const std::thread::id thread_id{std::this_thread::get_id()};
 
   napi_env__(JSGlobalContextRef context) : context{context} {
-#if __ANDROID__
-    JSCAndroidContextLock contextLock{context};
+#if defined(JSR_USE_BUN_JSC)
+    JSCBunContextLock contextLock{context};
 #endif
     napi_envs[context] = this;
     JSGlobalContextRetain(context);
@@ -88,21 +88,27 @@ struct napi_env__ {
   }
 
   ~napi_env__() {
-#if __ANDROID__
-    JSCAndroidContextLock contextLock{context};
+#if defined(JSR_USE_BUN_JSC)
+    {
+      // Releasing this holder may destroy the VM and run last-chance finalizers. Keep both this
+      // environment and its context lookup registered until those finalizers have completed.
+      JSCBunContextLock contextLock{context};
 #endif
-    shutting_down = true;
-    if (instance_data_finalize_cb != nullptr) {
-      instance_data_finalize_cb(this, instance_data, instance_data_finalize_hint);
+      shutting_down = true;
+      if (instance_data_finalize_cb != nullptr) {
+        instance_data_finalize_cb(this, instance_data, instance_data_finalize_hint);
+      }
+      deinit_refs();
+      deinit_symbol(is_bigint_function);
+      deinit_symbol(function_prototype_call);
+      deinit_symbol(wrapper_info_symbol);
+      deinit_symbol(reference_info_symbol);
+      deinit_symbol(function_info_symbol);
+      deinit_symbol(constructor_info_symbol);
+      JSGlobalContextRelease(context);
+#if defined(JSR_USE_BUN_JSC)
     }
-    deinit_refs();
-    deinit_symbol(is_bigint_function);
-    deinit_symbol(function_prototype_call);
-    deinit_symbol(wrapper_info_symbol);
-    deinit_symbol(reference_info_symbol);
-    deinit_symbol(function_info_symbol);
-    deinit_symbol(constructor_info_symbol);
-    JSGlobalContextRelease(context);
+#endif
     napi_envs.erase(context);
   }
 
@@ -133,14 +139,15 @@ struct napi_env__ {
     }                                                  \
   } while (0)
 
-#if __ANDROID__
+#if defined(JSR_USE_BUN_JSC)
 #define CHECK_ENV(env)                                      \
   do {                                                      \
     if ((env) == nullptr) {                                 \
       return napi_invalid_arg;                              \
     }                                                       \
   } while (0);                                              \
-  JSCAndroidAPILock jscAndroidAPILock{(env)->context};      \
+  /* Last-chance finalizers hold JSC's API lock. Avoid context APIs after shutdown. */ \
+  JSCBunAPILock jscBunAPILock{(env)->context, !(env)->shutting_down};                  \
   assert((env)->thread_id == std::this_thread::get_id())
 #else
 #define CHECK_ENV(env)                                      \

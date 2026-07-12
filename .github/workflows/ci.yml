@@ -124,26 +124,23 @@ jobs:
       runs-on: macos-26
       simulator: 'iPhone 17'
 
-  # ── Linux ─────────────────────────────────────────────────────
-  Ubuntu_gcc:
+  # Linux
+  Ubuntu_JSC_LTO:
     uses: ./.github/workflows/build-linux.yml
 
-  Ubuntu_clang:
+  Ubuntu_QuickJS_gcc:
     uses: ./.github/workflows/build-linux.yml
     with:
-      cc: clang
-      cxx: clang++
+      cc: gcc
+      cxx: g++
+      js-engine: QuickJS
 
   Ubuntu_Sanitizers_clang:
     uses: ./.github/workflows/build-linux.yml
     with:
-      cc: clang
-      cxx: clang++
       enable-sanitizers: true
 
   Ubuntu_ThreadSanitizer_clang:
     uses: ./.github/workflows/build-linux.yml
     with:
-      cc: clang
-      cxx: clang++
       enable-thread-sanitizer: true

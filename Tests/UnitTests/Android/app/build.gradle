@@ -17,7 +17,7 @@ def cmakeArguments = [
     "-DJSRUNTIMEHOST_CORE_APPRUNTIME_V8_INSPECTOR=ON"
 ]
 if (project.hasProperty("jscAndroidRoot")) {
-    cmakeArguments.add("-DJSR_JSC_ANDROID_ROOT=${project.property('jscAndroidRoot')}")
+    cmakeArguments.add("-DJSR_BUN_JSC_ROOT=${project.property('jscAndroidRoot')}")
 }
 // Hermes for Android needs HOST hermesc/shermes (they emit bytecode at build
 // time and can't run as NDK-cross-compiled binaries). The JsRuntimeHost CMake
