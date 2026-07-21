@@ -72,10 +72,12 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
       throw std::runtime_error("Unable to create QuickJS context");
     }
     env_ = Napi::Attach(context_);
+#elif defined(JSR_NAPI_ENGINE_HERMES)
+    env_ = Napi::Attach();
 #else
     (void)onUnhandledError_;
     throw std::runtime_error(
-        "node_lite is only implemented for Apple platforms in this port.");
+        "node_lite is not implemented for the selected JavaScript engine.");
 #endif
   }
 
@@ -170,6 +172,23 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
     if (runtime_ != nullptr) {
       JS_FreeRuntime(runtime_);
       runtime_ = nullptr;
+    }
+#elif defined(JSR_NAPI_ENGINE_HERMES)
+    if (env_ != nullptr) {
+      if (onUnhandledError_) {
+        bool hasPending = false;
+        if (napi_is_exception_pending(env_, &hasPending) == napi_ok && hasPending) {
+          napi_value error{};
+          if (napi_get_and_clear_last_exception(env_, &error) == napi_ok) {
+            try {
+              onUnhandledError_(env_, error);
+            } catch (...) {
+            }
+          }
+        }
+      }
+      Napi::Detach(Napi::Env{env_});
+      env_ = nullptr;
     }
 #endif
   }

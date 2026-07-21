@@ -3,6 +3,9 @@
 #include <napi/js_native_api.h>
 #include <napi/js_native_api_types.h>
 
+#include <exception>
+#include <string>
+
 #if defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
 #include <JavaScriptCore/JavaScript.h>
 #include "js_native_api_javascriptcore.h"
@@ -19,6 +22,8 @@
 #pragma clang diagnostic pop
 #endif
 #include "js_native_api_quickjs.h"
+#elif defined(JSR_NAPI_ENGINE_HERMES)
+#include <napi/env.h>
 #endif
 
 struct jsr_napi_env_scope_s {
@@ -77,7 +82,41 @@ napi_status jsr_run_script(napi_env env,
                            napi_value source,
                            const char* source_url,
                            napi_value* result) {
+#if defined(JSR_NAPI_ENGINE_HERMES)
+  if (env == nullptr || source == nullptr || result == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  size_t length{};
+  napi_status status =
+      napi_get_value_string_utf8(env, source, nullptr, 0, &length);
+  if (status != napi_ok) {
+    return status;
+  }
+
+  std::string script(length + 1, '\0');
+  size_t written{};
+  status = napi_get_value_string_utf8(
+      env, source, script.data(), script.size(), &written);
+  if (status != napi_ok) {
+    return status;
+  }
+  script.resize(written);
+
+  try {
+    *result = Napi::Eval(
+        Napi::Env{env}, script.c_str(), source_url == nullptr ? "" : source_url);
+    return napi_ok;
+  } catch (const Napi::Error& error) {
+    error.ThrowAsJavaScriptException();
+    return napi_pending_exception;
+  } catch (const std::exception& error) {
+    napi_throw_error(env, nullptr, error.what());
+    return napi_pending_exception;
+  }
+#else
   return napi_run_script(env, source, source_url, result);
+#endif
 }
 
 napi_status jsr_collect_garbage(napi_env env) {
@@ -111,6 +150,12 @@ napi_status jsr_collect_garbage(napi_env env) {
     return napi_invalid_arg;
   }
   JS_RunGC(JS_GetRuntime(env->context));
+  return napi_ok;
+#elif defined(JSR_NAPI_ENGINE_HERMES)
+  if (env == nullptr) {
+    return napi_invalid_arg;
+  }
+  Napi::CollectGarbage(Napi::Env{env});
   return napi_ok;
 #else
   (void)env;
@@ -157,6 +202,11 @@ napi_status jsr_drain_microtasks(napi_env env,
 #elif defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
   // JavaScriptCore drains promise jobs at the host call boundary.
   (void)max_count_hint;
+  *result = true;
+  return napi_ok;
+#elif defined(JSR_NAPI_ENGINE_HERMES)
+  (void)max_count_hint;
+  Napi::DrainJobs(Napi::Env{env});
   *result = true;
   return napi_ok;
 #else
