@@ -2628,14 +2628,6 @@ napi_status napi_create_external_arraybuffer(napi_env env,
   CHECK_ARG(env, result);
 
   CHECK_NAPI(ExternalArrayBufferInfo::Create(env, external_data, byte_length, finalize_cb, finalize_hint, result));
-
-  // Node-API defines a null, zero-length external backing store as already
-  // detached. JSC otherwise creates an ordinary empty ArrayBuffer, so detach
-  // it explicitly on maintained JSC builds (older jsc-android reports the
-  // existing ENOTSUP exception for this v7 operation).
-  if (external_data == nullptr && byte_length == 0) {
-    CHECK_NAPI(napi_detach_arraybuffer(env, *result));
-  }
   return napi_ok;
 }
 
