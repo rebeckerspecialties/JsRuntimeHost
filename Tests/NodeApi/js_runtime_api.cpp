@@ -9,6 +9,16 @@
 #elif defined(JSR_NAPI_ENGINE_V8)
 #include <v8.h>
 #include "js_native_api_v8.h"
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
+#include <quickjs.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+#include "js_native_api_quickjs.h"
 #endif
 
 struct jsr_napi_env_scope_s {
@@ -96,8 +106,62 @@ napi_status jsr_collect_garbage(napi_env env) {
   isolate->RequestGarbageCollectionForTesting(
       v8::Isolate::kFullGarbageCollection);
   return napi_ok;
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+  if (env == nullptr || env->context == nullptr) {
+    return napi_invalid_arg;
+  }
+  JS_RunGC(JS_GetRuntime(env->context));
+  return napi_ok;
 #else
   (void)env;
+  return napi_generic_failure;
+#endif
+}
+
+napi_status jsr_drain_microtasks(napi_env env,
+                                 int32_t max_count_hint,
+                                 bool* result) {
+  if (env == nullptr || result == nullptr) {
+    return napi_invalid_arg;
+  }
+
+#if defined(JSR_NAPI_ENGINE_QUICKJS)
+  if (env->context == nullptr) {
+    return napi_invalid_arg;
+  }
+
+  JSRuntime* runtime = JS_GetRuntime(env->context);
+  JSContext* pending_context = nullptr;
+  int32_t count = 0;
+  while (max_count_hint <= 0 || count < max_count_hint) {
+    int status = JS_ExecutePendingJob(runtime, &pending_context);
+    if (status < 0) {
+      return napi_pending_exception;
+    }
+    if (status == 0) {
+      *result = true;
+      return napi_ok;
+    }
+    ++count;
+  }
+
+  *result = !JS_IsJobPending(runtime);
+  return napi_ok;
+#elif defined(JSR_NAPI_ENGINE_V8)
+  if (env->isolate == nullptr) {
+    return napi_invalid_arg;
+  }
+  env->isolate->PerformMicrotaskCheckpoint();
+  *result = true;
+  return napi_ok;
+#elif defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
+  // JavaScriptCore drains promise jobs at the host call boundary.
+  (void)max_count_hint;
+  *result = true;
+  return napi_ok;
+#else
+  (void)max_count_hint;
+  *result = false;
   return napi_generic_failure;
 #endif
 }

@@ -94,12 +94,19 @@ target_include_directories(node_lite
 target_compile_definitions(node_lite
     PRIVATE
         NODE_API_EXPERIMENTAL_NO_WARNING
+        NODE_API_BUILD_TYPE="$<IF:$<CONFIG:Debug>,Debug,Release>"
 )
 
 target_link_libraries(node_lite
     PRIVATE
         napi
 )
+
+if(UNIX AND NOT APPLE)
+    # Native test addons resolve napi_* against the embedding executable, like
+    # node itself. Export node_lite's symbols so dlopen can bind them on ELF.
+    set_target_properties(node_lite PROPERTIES ENABLE_EXPORTS ON)
+endif()
 
 node_api_copy_test_sources(node_lite)
 

@@ -259,6 +259,11 @@ static JSValue Callback(JSContext *ctx, JSValueConst this_val, int argc, JSValue
 
 // Reference info for preventing GC - defined in js_native_api_quickjs.h.
 
+struct HandleScopeInfo {
+  size_t start;
+  bool escaped;
+};
+
 // Initialize class IDs (allocate once globally, register per runtime)
 void InitClassIds(JSRuntime* rt) {
   if (!class_ids_allocated) {
@@ -1889,7 +1894,8 @@ napi_status napi_open_handle_scope(napi_env env, napi_handle_scope* result) {
   CHECK_ARG(env, result);
   
   env->current_scope_start = env->handle_scope_stack.size();
-  *result = reinterpret_cast<napi_handle_scope>(env->current_scope_start + 1);
+  *result = reinterpret_cast<napi_handle_scope>(
+    new HandleScopeInfo{env->current_scope_start, false});
   
   napi_clear_last_error(env);
   return napi_ok;
@@ -1900,7 +1906,8 @@ napi_status napi_close_handle_scope(napi_env env, napi_handle_scope scope) {
   CHECK_ARG(env, scope);
   
   // Free all JSValues created in this scope
-  size_t scope_start = reinterpret_cast<size_t>(scope) - 1;
+  auto* scopeInfo = reinterpret_cast<HandleScopeInfo*>(scope);
+  size_t scope_start = scopeInfo->start;
   
   // Call JS_FreeValue on all values in scope
   for (size_t i = scope_start; i < env->handle_scope_stack.size(); i++) {
@@ -1910,6 +1917,7 @@ napi_status napi_close_handle_scope(napi_env env, napi_handle_scope scope) {
   // Remove from stack
   env->handle_scope_stack.resize(scope_start);
   env->current_scope_start = scope_start;
+  delete scopeInfo;
   
   napi_clear_last_error(env);
   return napi_ok;
@@ -1920,9 +1928,9 @@ napi_status napi_open_escapable_handle_scope(napi_env env, napi_escapable_handle
   CHECK_ENV(env);
   CHECK_ARG(env, result);
   
-  // Same as regular handle scope for QuickJS
   env->current_scope_start = env->handle_scope_stack.size();
-  *result = reinterpret_cast<napi_escapable_handle_scope>(env->current_scope_start + 1);
+  *result = reinterpret_cast<napi_escapable_handle_scope>(
+    new HandleScopeInfo{env->current_scope_start, false});
   
   napi_clear_last_error(env);
   return napi_ok;
@@ -1932,8 +1940,8 @@ napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handl
   CHECK_ENV(env);
   CHECK_ARG(env, scope);
   
-  // Same cleanup as regular handle scope
-  size_t scope_start = reinterpret_cast<size_t>(scope) - 1;
+  auto* scopeInfo = reinterpret_cast<HandleScopeInfo*>(scope);
+  size_t scope_start = scopeInfo->start;
   
   for (size_t i = scope_start; i < env->handle_scope_stack.size(); i++) {
     JS_FreeValue(env->context, *env->handle_scope_stack[i]);
@@ -1941,6 +1949,7 @@ napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handl
   
   env->handle_scope_stack.resize(scope_start);
   env->current_scope_start = scope_start;
+  delete scopeInfo;
   
   napi_clear_last_error(env);
   return napi_ok;
@@ -1952,8 +1961,11 @@ napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, 
   CHECK_ARG(env, escapee);
   CHECK_ARG(env, result);
   
-  // Get the scope start index
-  size_t scope_start = reinterpret_cast<size_t>(scope) - 1;
+  auto* scopeInfo = reinterpret_cast<HandleScopeInfo*>(scope);
+  if (scopeInfo->escaped) {
+    return napi_set_last_error(env, napi_escape_called_twice);
+  }
+  size_t scope_start = scopeInfo->start;
   
   // Duplicate the JSValue to create a new handle that will outlive the current scope
   JSValue jsValue = ToJSValue(escapee);
@@ -1963,30 +1975,16 @@ napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, 
   auto parentPtr = std::make_unique<JSValue>(escapedValue);
   napi_value parentHandle = reinterpret_cast<napi_value>(parentPtr.get());
   
-  // Insert at parent scope position (before current scope)
-  if (scope_start > 0) {
-    env->handle_scope_stack.insert(
-      env->handle_scope_stack.begin() + scope_start,
-      std::move(parentPtr)
-    );
-    
-    // Note: Inserting shifts indices, but since we're inserting at scope_start,
-    // the current scope's start index is now scope_start + 1
-    // We need to update current_scope_start if it was pointing to this scope
-    if (env->current_scope_start == scope_start) {
-      env->current_scope_start = scope_start + 1;
-    }
-  } else {
-    // No parent scope - just add to the beginning
-    env->handle_scope_stack.insert(
-      env->handle_scope_stack.begin(),
-      std::move(parentPtr)
-    );
-    
-    if (env->current_scope_start == 0) {
-      env->current_scope_start = 1;
-    }
-  }
+  // Insert immediately before the current scope. Advancing this scope's start
+  // keeps close_escapable_handle_scope from releasing the escaped handle; an
+  // enclosing scope will still release it at the correct time. At the root it
+  // remains alive until environment teardown.
+  env->handle_scope_stack.insert(
+    env->handle_scope_stack.begin() + scope_start,
+    std::move(parentPtr));
+  scopeInfo->start++;
+  scopeInfo->escaped = true;
+  env->current_scope_start = scopeInfo->start;
   
   *result = parentHandle;
   napi_clear_last_error(env);
@@ -2027,32 +2025,89 @@ napi_status napi_create_arraybuffer(napi_env env, size_t byte_length, void** dat
 }
 
 namespace {
-  void ArrayBufferFreeCallback(JSRuntime* rt, void* opaque, void* ptr) {
-    ExternalData* externalData = reinterpret_cast<ExternalData*>(opaque);
-    if (externalData != nullptr) {
-      // Invoke via the class finalizer which calls _cb properly
-      ExternalData::RunCallback(externalData);
-      delete externalData;
+  napi_status AttachFinalizerHolder(napi_env env,
+                                    JSValueConst jsObject,
+                                    void* finalizeData,
+                                    napi_finalize finalizeCb,
+                                    void* finalizeHint) {
+    JSRuntime* rt = JS_GetRuntime(env->context);
+    InitClassIds(rt);
+
+    JSValue holder = JS_NewObjectClass(env->context, js_external_class_id);
+    if (JS_IsException(holder)) {
+      return napi_set_last_error(env, napi_generic_failure);
     }
+
+    JSValue symbol = JS_NewSymbol(env->context, "napi.finalizer", false);
+    if (JS_IsException(symbol)) {
+      JS_FreeValue(env->context, holder);
+      return napi_set_last_error(env, napi_generic_failure);
+    }
+
+    JSAtom atom = JS_ValueToAtom(env->context, symbol);
+    JS_FreeValue(env->context, symbol);
+    if (atom == JS_ATOM_NULL) {
+      JS_FreeValue(env->context, holder);
+      return napi_set_last_error(env, napi_generic_failure);
+    }
+
+    // JS_DefinePropertyValue consumes its value regardless of success. Pass a
+    // duplicate and retain the local reference until the definition succeeds,
+    // so an attachment failure does not invoke a finalizer for memory that
+    // remains owned by the caller.
+    int defineResult = JS_DefinePropertyValue(
+      env->context,
+      jsObject,
+      atom,
+      JS_DupValue(env->context, holder),
+      JS_PROP_HAS_VALUE | JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(env->context, atom);
+    if (defineResult < 0) {
+      JS_FreeValue(env->context, holder);
+      return napi_set_last_error(env, napi_pending_exception);
+    }
+
+    JS_SetOpaque(holder, new ExternalData(env, finalizeData, finalizeCb, finalizeHint));
+    JS_FreeValue(env->context, holder);
+    return napi_ok;
   }
 }
 
 napi_status napi_create_external_arraybuffer(napi_env env, void* external_data, size_t byte_length, napi_finalize finalize_cb, void* finalize_hint, napi_value* result) {
   CHECK_ENV(env);
   CHECK_ARG(env, result);
-  
-  ExternalData* externalDataInfo = new ExternalData(env, external_data, finalize_cb, finalize_hint);
+
+  // Node treats a zero-length external ArrayBuffer with a null backing store
+  // as detached. quickjs-ng otherwise creates a valid zero-length buffer.
+  const bool createDetached = external_data == nullptr && byte_length == 0;
   
   JSValue arrayBuffer = JS_NewArrayBuffer(env->context, 
                                           reinterpret_cast<uint8_t*>(external_data), 
                                           byte_length, 
-                                          ArrayBufferFreeCallback, 
-                                          externalDataInfo, 
+                                          nullptr,
+                                          nullptr,
                                           0);
   
   if (JS_IsException(arrayBuffer)) {
-    delete externalDataInfo;
     return napi_set_last_error(env, napi_generic_failure);
+  }
+
+  // Let a holder owned by the ArrayBuffer run the Node-API finalizer. Using
+  // QuickJS's backing-store free callback is unsafe for detachable buffers:
+  // quickjs-ng invokes it once during detach and again during object teardown.
+  // The holder instead survives detach and finalizes exactly once with the
+  // ArrayBuffer object, while QuickJS never tries to free embedder-owned data.
+  if (finalize_cb != nullptr) {
+    napi_status status = AttachFinalizerHolder(
+      env, arrayBuffer, external_data, finalize_cb, finalize_hint);
+    if (status != napi_ok) {
+      JS_FreeValue(env->context, arrayBuffer);
+      return status;
+    }
+  }
+
+  if (createDetached) {
+    JS_DetachArrayBuffer(env->context, arrayBuffer);
   }
   
   *result = FromJSValue(env, arrayBuffer);
@@ -2440,6 +2495,37 @@ napi_status napi_run_script(napi_env env, napi_value script, const char* source_
   }
   
   *result = FromJSValue(env, jsResult);
+  napi_clear_last_error(env);
+  return napi_ok;
+}
+
+napi_status napi_add_finalizer(napi_env env,
+                               napi_value js_object,
+                               void* finalize_data,
+                               napi_finalize finalize_cb,
+                               void* finalize_hint,
+                               napi_ref* result) {
+  CHECK_ENV(env);
+  CHECK_ARG(env, js_object);
+  CHECK_ARG(env, finalize_cb);
+
+  JSValue jsObject = ToJSValue(js_object);
+  if (!JS_IsObject(jsObject)) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+
+  // QuickJS does not expose an embedder field for arbitrary objects. Keep a
+  // native-finalized holder alive through a unique Symbol property instead;
+  // collecting the target releases the holder and runs the Node-API callback.
+  // A fresh Symbol makes the attachment collision-free and invisible to
+  // string-keyed reflection.
+  CHECK_NAPI(AttachFinalizerHolder(
+    env, jsObject, finalize_data, finalize_cb, finalize_hint));
+
+  if (result != nullptr) {
+    CHECK_NAPI(napi_create_reference(env, js_object, 0, result));
+  }
+
   napi_clear_last_error(env);
   return napi_ok;
 }

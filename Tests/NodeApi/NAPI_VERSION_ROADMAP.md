@@ -30,7 +30,7 @@ This is a multi-PR effort. Keep the boundaries strict:
 |---|---|:--:|:--:|:--:|:--:|---|
 | **V8** | `js_native_api_v8.cc` | ✅ | ✅ | ✅ | ✅ | Current CTS caught and fixed a stale stub which reported every value as detached. |
 | **JavaScriptCore** | `js_native_api_javascriptcore.cc` | ✅ | ✅* | ✅* | ❌ | System JSC is green-capable; old Android JSC feature-detects BigInt/detach and reports ENOTSUP. |
-| **QuickJS** | `js_native_api_quickjs.cc` | ✅ | ✅ | ✅ | partial | Added by upstream after #189 branched; v6 word BigInts, lossless conversion, instance data, and exact detach checks are included in the merge update. |
+| **QuickJS** | `js_native_api_quickjs.cc` | ✅ | ✅ | ✅ | partial | Added by upstream after #189 branched; the merge update completes word BigInts, lossless conversion, instance data/finalizers, exact detach semantics, and escaped-handle lifetime. |
 | **Hermes** | upstream `hermesNapi` | ✅ | ✅ | ✅ | ✅ | Hermes supplies its own N-API v10 implementation; JsRuntimeHost exposes only the selected public header level. |
 | **Chakra** | `js_native_api_chakra.cc` | ✅ | ❌ (hard wall: BigInt) | ❌ | partial | Frozen OS engine on post-EOL Win10; it remains capability-gated. |
 | **JSI** | `Core/Node-API-JSI` | ✅* | ❌ | ❌ | ❌ | Separate v1-v5 shim; excluded from v6/v7 addon coverage. |
@@ -130,8 +130,9 @@ weak-ref-over-Proxy case in the suite yet; add one at the v9 tier.
     itself matches — a future migration is much smoother now.
   - **Direct action taken here:** its current `test_typedarray` native test is content-equivalent to the vendored
     copy and exercises the v7 detach contract. It is now enabled at v7; this exposed the V8 always-true stub and
-    QuickJS's zero-length/non-ArrayBuffer false positives. Its BigInt cases also require full word conversion and
-    correct `lossless` reporting, which are now implemented for QuickJS.
+    QuickJS's zero-length/non-ArrayBuffer false positives plus a double finalizer on detached external buffers.
+    Its BigInt cases also require full word conversion and correct `lossless` reporting, which are now implemented
+    for QuickJS. Linux CI runs the BigInt, instance-data, and typed-array cases as an explicit v7 conformance subset.
   - **Upside (why track it):** engine-agnostic, active (including `test_bigint`, `test_typedarray`, SharedArrayBuffer,
     references, strings and dates), CMake-based, and
     contributing a JsRuntimeHost implementor could upstream our Android in-process + static-link learnings.

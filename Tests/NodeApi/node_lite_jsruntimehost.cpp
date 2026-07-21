@@ -13,6 +13,15 @@
 #elif defined(JSR_NAPI_ENGINE_V8)
 #include <v8.h>
 #include "js_native_api_v8.h"
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
+#include <quickjs.h>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 namespace node_api_tests {
@@ -51,6 +60,18 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
     context_.Reset(isolate_, context);
     v8::Context::Scope context_scope(context);
     env_ = Napi::Attach(context);
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+    runtime_ = JS_NewRuntime();
+    if (runtime_ == nullptr) {
+      throw std::runtime_error("Unable to create QuickJS runtime");
+    }
+    context_ = JS_NewContext(runtime_);
+    if (context_ == nullptr) {
+      JS_FreeRuntime(runtime_);
+      runtime_ = nullptr;
+      throw std::runtime_error("Unable to create QuickJS context");
+    }
+    env_ = Napi::Attach(context_);
 #else
     (void)onUnhandledError_;
     throw std::runtime_error(
@@ -125,6 +146,31 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
     }
 
     allocator_.reset();
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+    if (env_ != nullptr) {
+      if (onUnhandledError_) {
+        bool hasPending = false;
+        if (napi_is_exception_pending(env_, &hasPending) == napi_ok && hasPending) {
+          napi_value error{};
+          if (napi_get_and_clear_last_exception(env_, &error) == napi_ok) {
+            try {
+              onUnhandledError_(env_, error);
+            } catch (...) {
+            }
+          }
+        }
+      }
+      Napi::Detach(Napi::Env{env_});
+      env_ = nullptr;
+    }
+    if (context_ != nullptr) {
+      JS_FreeContext(context_);
+      context_ = nullptr;
+    }
+    if (runtime_ != nullptr) {
+      JS_FreeRuntime(runtime_);
+      runtime_ = nullptr;
+    }
 #endif
   }
 
@@ -139,6 +185,9 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
   std::unique_ptr<v8::Isolate::Scope> isolate_scope_{};
   v8::Global<v8::Context> context_;
   std::unique_ptr<v8::ArrayBuffer::Allocator> allocator_{};
+#elif defined(JSR_NAPI_ENGINE_QUICKJS)
+  JSRuntime* runtime_{};
+  JSContext* context_{};
 #endif
   napi_env env_{};
   std::function<void(napi_env, napi_value)> onUnhandledError_{};

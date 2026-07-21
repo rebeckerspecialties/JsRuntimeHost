@@ -65,3 +65,8 @@ jobs:
           # thread_suspend() and is unaffected.
           JSC_useConcurrentGC: ${{ inputs.enable-thread-sanitizer && '0' || '' }}
 
+      - name: Run Node-API v7 conformance subset
+        working-directory: Build/ubuntu/Tests/NodeApi
+        run: >-
+          ./NodeApiTests
+          --gtest_filter=js_native_api.test_bigint_test_js:js_native_api.test_instance_data_test_js:js_native_api.test_typedarray_test_js
