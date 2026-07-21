@@ -20,8 +20,9 @@ set(JSR_NODE_API_NATIVE_TEST_DIRS
 # v6/v7 conformance addons. The JSI backend (Core/Node-API-JSI) does not implement the v6/v7 C surface,
 # so its addons are omitted (its build links only the v1-v5 set). V8 + JavaScriptCore execute these for
 # real; Chakra links them (instance_data works; BigInt throws ENOTSUP via feature-detection).
-# NOTE: detach (v7, test_typedarray) + get_all_property_names (v6, test_object) use v9 APIs
-# (node_api_basic_env) and enable at the v9 bump.
+# The current node-api-cts typed-array addon only needs the v7 API surface;
+# node_api_basic_env is an ABI-compatible finalizer typedef here. Enable it
+# now so detach/is-detached behavior is exercised instead of waiting for v9.
 if(NOT NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_instance_data)
     # BigInt: the real conformance test where the engine has BigInt; an ENOTSUP feature-detection
@@ -32,6 +33,14 @@ if(NOT NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
         list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_bigint_unsupported)
     else()
         list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_bigint)
+    endif()
+
+    # Frozen Chakra and the old Android JSC do not expose a real detach
+    # primitive. All modern engines covered by the v7 branch run the upstream
+    # CTS-derived typed-array/detach cases.
+    if(NOT NAPI_JAVASCRIPT_ENGINE STREQUAL "Chakra" AND
+       NOT (NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore" AND ANDROID))
+        list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_typedarray)
     endif()
 endif()
 
