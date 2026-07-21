@@ -202,9 +202,9 @@ Make sure Hermes was fetched at the top-level CMakeLists.txt and NAPI_JAVASCRIPT
         # (bigint::exponentiate, regex::parseRegex, hbc::compileEvalModule,
         # llvh::raw_ostream, platform_unicode::normalize, ...) which
         # `hermesvm_a` bundles together for us.
-        set(LINK_LIBRARIES ${LINK_LIBRARIES}
-            PRIVATE hermesNapi
-            PRIVATE hermesvm_a)
+        set(NAPI_HERMES_LINK_LIBRARIES
+            hermesNapi
+            hermesvm_a)
 
         # `hermes_napi.h` lives in Hermes's `API/napi/` source directory and
         # is NOT installed alongside the other `include/hermes/napi/`
@@ -297,6 +297,29 @@ endif()
 
 target_include_directories(napi ${INCLUDE_DIRECTORIES})
 target_link_libraries(napi ${LINK_LIBRARIES})
+
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "Hermes")
+    if(JSR_NAPI_SHARED)
+        # hermesNapi is a static archive. When it is folded into libnapi.so,
+        # the linker would normally extract only the objects referenced by
+        # env_hermes.cc, leaving most exported napi_* entry points out of the
+        # shared library. Android addons then fail to resolve even core APIs
+        # such as napi_create_arraybuffer and napi_wrap. Include the complete
+        # archive so the shared library provides the full Node-API surface.
+        if(MSVC)
+            target_link_libraries(napi PRIVATE ${NAPI_HERMES_LINK_LIBRARIES})
+            target_link_options(napi PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:hermesNapi>")
+        else()
+            target_link_libraries(napi PRIVATE
+                "-Wl,--whole-archive"
+                hermesNapi
+                "-Wl,--no-whole-archive"
+                hermesvm_a)
+        endif()
+    else()
+        target_link_libraries(napi PRIVATE ${NAPI_HERMES_LINK_LIBRARIES})
+    endif()
+endif()
 
 if(JSR_JSC_HAS_BIGINT_TYPED_ARRAYS)
     target_compile_definitions(napi PRIVATE JSR_JSC_HAS_BIGINT_TYPED_ARRAYS=1)
