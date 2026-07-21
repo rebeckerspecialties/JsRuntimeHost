@@ -42,8 +42,10 @@ add_library(UnitTestsJNI SHARED
     ${TESTS_DIR}/NodeApi/string_utils.cpp
     ${TESTS_DIR}/NodeApi/test_main.cpp)
 
-target_compile_definitions(UnitTestsJNI PRIVATE JSRUNTIMEHOST_PLATFORM="${JSRUNTIMEHOST_PLATFORM}")
-target_compile_definitions(UnitTestsJNI PRIVATE ARCANA_TEST_HOOKS)
+target_compile_definitions(UnitTestsJNI
+    PRIVATE JSRUNTIMEHOST_PLATFORM="${JSRUNTIMEHOST_PLATFORM}"
+    PRIVATE ARCANA_TEST_HOOKS
+    PRIVATE NODE_API_BUILD_TYPE="$<IF:$<CONFIG:Debug>,Debug,Release>")
 
 target_include_directories(UnitTestsJNI
     PRIVATE ${UNIT_TESTS_DIR}

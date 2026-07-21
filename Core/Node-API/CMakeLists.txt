@@ -13,7 +13,7 @@ if(NOT NAPI_JAVASCRIPT_ENGINE)
     endif()
 endif()
 
-if(UNIX AND NOT APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+if(UNIX AND NOT APPLE AND NOT ANDROID AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
     find_library(JAVASCRIPTCORE_LIBRARY javascriptcoregtk-4.1)
     if(NOT JAVASCRIPTCORE_LIBRARY)
         message(FATAL_ERROR "JavaScriptCore library not found. Please install libwebkit2gtk-4.1-dev")
