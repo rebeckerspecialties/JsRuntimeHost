@@ -2628,6 +2628,14 @@ napi_status napi_create_external_arraybuffer(napi_env env,
   CHECK_ARG(env, result);
 
   CHECK_NAPI(ExternalArrayBufferInfo::Create(env, external_data, byte_length, finalize_cb, finalize_hint, result));
+
+  // Node-API defines a null, zero-length external backing store as already
+  // detached. JSC otherwise creates an ordinary empty ArrayBuffer, so detach
+  // it explicitly on maintained JSC builds (older jsc-android reports the
+  // existing ENOTSUP exception for this v7 operation).
+  if (external_data == nullptr && byte_length == 0) {
+    CHECK_NAPI(napi_detach_arraybuffer(env, *result));
+  }
   return napi_ok;
 }
 
@@ -2705,6 +2713,14 @@ napi_status napi_create_typedarray(napi_env env,
     case napi_float64_array:
       jsType = kJSTypedArrayTypeFloat64Array;
       break;
+#if defined(JSR_JSC_HAS_BIGINT_TYPED_ARRAYS)
+    case napi_bigint64_array:
+      jsType = kJSTypedArrayTypeBigInt64Array;
+      break;
+    case napi_biguint64_array:
+      jsType = kJSTypedArrayTypeBigUint64Array;
+      break;
+#endif
     default:
       return napi_set_last_error(env, napi_invalid_arg);
   }
@@ -2768,6 +2784,14 @@ napi_status napi_get_typedarray_info(napi_env env,
       case kJSTypedArrayTypeFloat64Array:
         *type = napi_float64_array;
         break;
+#if defined(JSR_JSC_HAS_BIGINT_TYPED_ARRAYS)
+      case kJSTypedArrayTypeBigInt64Array:
+        *type = napi_bigint64_array;
+        break;
+      case kJSTypedArrayTypeBigUint64Array:
+        *type = napi_biguint64_array;
+        break;
+#endif
       default:
         return napi_set_last_error(env, napi_generic_failure);
     }

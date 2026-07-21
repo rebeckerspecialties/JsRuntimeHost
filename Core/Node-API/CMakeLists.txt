@@ -13,7 +13,7 @@ if(NOT NAPI_JAVASCRIPT_ENGINE)
     endif()
 endif()
 
-if(UNIX AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+if(UNIX AND NOT APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
     find_library(JAVASCRIPTCORE_LIBRARY javascriptcoregtk-4.1)
     if(NOT JAVASCRIPTCORE_LIBRARY)
         message(FATAL_ERROR "JavaScriptCore library not found. Please install libwebkit2gtk-4.1-dev")
@@ -101,6 +101,13 @@ if(NAPI_BUILD_ABI)
                 PUBLIC "/usr/include/webkitgtk-4.1/")
         else()
             message(FATAL_ERROR "Unsupported JavaScript engine: ${NAPI_JAVASCRIPT_ENGINE}")
+        endif()
+
+        # The maintained Apple and WebKitGTK headers/runtimes expose the
+        # BigInt typed-array enum values. The frozen jsc-android package does
+        # not, so keep its capability-gated build on the older enum surface.
+        if(NOT ANDROID)
+            set(JSR_JSC_HAS_BIGINT_TYPED_ARRAYS ON)
         endif()
     elseif(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
         set(SOURCES ${SOURCES}
@@ -290,6 +297,10 @@ endif()
 
 target_include_directories(napi ${INCLUDE_DIRECTORIES})
 target_link_libraries(napi ${LINK_LIBRARIES})
+
+if(JSR_JSC_HAS_BIGINT_TYPED_ARRAYS)
+    target_compile_definitions(napi PRIVATE JSR_JSC_HAS_BIGINT_TYPED_ARRAYS=1)
+endif()
 
 # Expose the selected engine as a compile definition so engine-agnostic consumers (the node_lite test
 # harness) can branch on engine capability instead of guessing from the platform
