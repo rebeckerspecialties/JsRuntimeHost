@@ -1329,6 +1329,7 @@ NodeApiEnvScope& NodeApiEnvScope::operator=(NodeApiEnvScope&& other) noexcept {
                                               std::string_view name,
                                               NodeApiCallback cb) {
   napi_value result{};
+  auto callback = std::make_unique<NodeApiCallback>(std::move(cb));
   NODE_LITE_CALL(napi_create_function(
       env,
       name.data(),
@@ -1343,9 +1344,18 @@ NodeApiEnvScope& NodeApiEnvScope::operator=(NodeApiEnvScope&& other) noexcept {
         });
         return result;
       },
-      // TODO: (vmoroz) Find a way to delete it on close.
-      new NodeApiCallback(std::move(cb)),
+      callback.get(),
       &result));
+  NODE_LITE_CALL(napi_add_finalizer(
+      env,
+      result,
+      callback.get(),
+      [](napi_env, void* data, void*) {
+        delete static_cast<NodeApiCallback*>(data);
+      },
+      nullptr,
+      nullptr));
+  callback.release();
   return result;
 }
 
