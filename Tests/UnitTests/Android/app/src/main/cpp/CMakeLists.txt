@@ -77,18 +77,16 @@ target_link_libraries(UnitTestsJNI
 if(ANDROID)
     target_link_libraries(UnitTestsJNI PRIVATE dl)
 endif()
-# The v1-v5 suite + v6 instance_data run on both Android engines. BigInt runs for real on V8; on
-# jsc-android (~2020) the eval-based BigInt shim isn't green yet on-device (the in-process runner gives
-# no error detail; macOS JSC + V8 both pass test_bigint), so it's gated to V8 here and tracked as a
-# follow-up. Keep in sync with JSR_NODE_API_NATIVE_TEST_DIRS in Tests/NodeApi/CMakeLists.txt.
+# Keep the in-process Android list aligned with JSR_NODE_API_NATIVE_TEST_DIRS
+# in Tests/NodeApi/CMakeLists.txt.
 set(_jsr_node_api_tests
     "2_function_arguments,3_callbacks,4_object_factory,5_function_factory,test_reference_double_free,test_instance_data")
-# BigInt runs for real on V8. jsc-android (~2020) has no BigInt (its parser rejects `0n`), so it runs
-# the ENOTSUP feature-detection fallback (test_bigint_unsupported) instead.
-if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
-    string(APPEND _jsr_node_api_tests ",test_bigint")
-else()
+# Frozen jsc-android has no BigInt (its parser rejects `0n`); the maintained
+# V8, QuickJS, and Hermes adapters run the real conformance addon.
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
     string(APPEND _jsr_node_api_tests ",test_bigint_unsupported")
+else()
+    string(APPEND _jsr_node_api_tests ",test_bigint")
 endif()
 target_compile_definitions(UnitTestsJNI
     PRIVATE NODE_API_AVAILABLE_NATIVE_TESTS="${_jsr_node_api_tests}")
