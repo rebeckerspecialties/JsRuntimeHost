@@ -11,6 +11,7 @@ target_include_directories(Fetch PUBLIC "Include")
 target_link_libraries(Fetch
     PUBLIC JsRuntime
     PRIVATE arcana
+    PRIVATE base-n
     PRIVATE UrlLib)
 
 set_property(TARGET Fetch PROPERTY FOLDER Polyfills)

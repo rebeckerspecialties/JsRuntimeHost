@@ -5,10 +5,12 @@
 #include <Babylon/Polyfills/Fetch.h>
 
 #include <UrlLib/UrlLib.h>
+#include <basen.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -61,6 +63,100 @@ namespace Babylon::Polyfills::Internal
             return std::equal(a.begin(), a.end(), b.begin(), b.end(), [](unsigned char l, unsigned char r) {
                 return std::tolower(l) == std::tolower(r);
             });
+        }
+
+        int HexDigitValue(char value)
+        {
+            if (value >= '0' && value <= '9')
+            {
+                return value - '0';
+            }
+            if (value >= 'a' && value <= 'f')
+            {
+                return value - 'a' + 10;
+            }
+            if (value >= 'A' && value <= 'F')
+            {
+                return value - 'A' + 10;
+            }
+            return -1;
+        }
+
+        std::vector<uint8_t> PercentDecode(std::string_view value)
+        {
+            std::vector<uint8_t> decoded;
+            decoded.reserve(value.size());
+            for (size_t index = 0; index < value.size(); ++index)
+            {
+                if (value[index] == '%' && index + 2 < value.size())
+                {
+                    const int high = HexDigitValue(value[index + 1]);
+                    const int low = HexDigitValue(value[index + 2]);
+                    if (high >= 0 && low >= 0)
+                    {
+                        decoded.push_back(static_cast<uint8_t>((high << 4) | low));
+                        index += 2;
+                        continue;
+                    }
+                }
+                decoded.push_back(static_cast<uint8_t>(value[index]));
+            }
+            return decoded;
+        }
+
+        std::optional<std::shared_ptr<ResponseData>> ParseDataUrl(std::string_view url)
+        {
+            if (url.size() < 5 || !EqualsIgnoreCase(url.substr(0, 4), "data") || url[4] != ':')
+            {
+                return std::nullopt;
+            }
+
+            const auto comma = url.find(',', 5);
+            if (comma == std::string_view::npos)
+            {
+                throw std::runtime_error{"fetch: malformed data URL"};
+            }
+
+            std::string mediaType{url.substr(5, comma - 5)};
+            bool base64 = false;
+            static constexpr std::string_view BASE64_SUFFIX{";base64"};
+            if (mediaType.size() >= BASE64_SUFFIX.size() &&
+                EqualsIgnoreCase(std::string_view{mediaType}.substr(mediaType.size() - BASE64_SUFFIX.size()), BASE64_SUFFIX))
+            {
+                mediaType.resize(mediaType.size() - BASE64_SUFFIX.size());
+                base64 = true;
+            }
+            if (mediaType.empty())
+            {
+                mediaType = "text/plain;charset=US-ASCII";
+            }
+
+            auto decodedPayload = PercentDecode(url.substr(comma + 1));
+            std::vector<uint8_t> body;
+            if (base64)
+            {
+                decodedPayload.erase(
+                    std::remove_if(decodedPayload.begin(), decodedPayload.end(), [](uint8_t value) {
+                        return std::isspace(static_cast<unsigned char>(value)) != 0;
+                    }),
+                    decodedPayload.end());
+                bn::decode_b64(decodedPayload.begin(), decodedPayload.end(), std::back_inserter(body));
+            }
+            else
+            {
+                body = std::move(decodedPayload);
+            }
+
+            auto data = std::make_shared<ResponseData>();
+            data->statusCode = 200;
+            data->statusText = "OK";
+            data->url = std::string{url};
+            data->headers.emplace_back("content-type", std::move(mediaType));
+            data->body.resize(body.size());
+            std::transform(body.begin(), body.end(), data->body.begin(), [](uint8_t value) {
+                return static_cast<std::byte>(value);
+            });
+            return data;
         }
 
         // Stable message used for every transport-failure rejection. Browsers and Node both keep
@@ -402,6 +498,26 @@ namespace Babylon::Polyfills::Internal
 
                         headers = init.Get("headers");
                         signal = init.Get("signal");
+                    }
+
+                    if (signal.IsObject())
+                    {
+                        const auto signalObject = signal.As<Napi::Object>();
+                        if (signalObject.Get("aborted").ToBoolean().Value())
+                        {
+                            deferred.Reject(GetAbortReason(env, signalObject));
+                            return deferred.Promise();
+                        }
+                    }
+
+                    if (auto dataUrl = ParseDataUrl(url))
+                    {
+                        if (method != UrlLib::UrlMethod::Get || body.has_value())
+                        {
+                            throw std::runtime_error{"fetch: data URLs only support GET requests"};
+                        }
+                        deferred.Resolve(BuildResponse(env, *dataUrl));
+                        return deferred.Promise();
                     }
 
                     auto request = std::make_shared<UrlLib::UrlRequest>();
