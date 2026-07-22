@@ -5,6 +5,7 @@
 #include <JavaScriptCore/JavaScript.h>
 #include <unordered_map>
 #include <list>
+#include <mutex>
 #include <thread>
 #include <cassert>
 #include <map>
@@ -61,7 +62,10 @@ struct napi_env__ {
   const std::thread::id thread_id{std::this_thread::get_id()};
 
   napi_env__(JSGlobalContextRef context) : context{context} {
-    napi_envs[context] = this;
+    {
+      std::lock_guard lock{napi_envs_mutex};
+      napi_envs[context] = this;
+    }
     JSGlobalContextRetain(context);
     init_symbol(constructor_info_symbol, "BabylonNative_ConstructorInfo");
     init_symbol(function_info_symbol, "BabylonNative_FunctionInfo");
@@ -93,10 +97,14 @@ struct napi_env__ {
     deinit_symbol(function_info_symbol);
     deinit_symbol(constructor_info_symbol);
     JSGlobalContextRelease(context);
-    napi_envs.erase(context);
+    {
+      std::lock_guard lock{napi_envs_mutex};
+      napi_envs.erase(context);
+    }
   }
 
   static napi_env get(JSGlobalContextRef context) {
+    std::lock_guard lock{napi_envs_mutex};
     auto it = napi_envs.find(context);
     if (it != napi_envs.end()) {
       return it->second;
@@ -106,6 +114,7 @@ struct napi_env__ {
   }
 
  private:
+  static inline std::mutex napi_envs_mutex{};
   static inline std::unordered_map<JSGlobalContextRef, napi_env> napi_envs{};
 
   void deinit_refs();
