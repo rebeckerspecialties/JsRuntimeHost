@@ -63,6 +63,10 @@ if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
     target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_V8)
 endif()
 
+if(APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_APPLE_JAVASCRIPTCORE)
+endif()
+
 target_link_libraries(UnitTests
     PRIVATE AppRuntime
     PRIVATE Console
