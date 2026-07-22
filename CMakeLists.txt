@@ -181,7 +181,7 @@ if(JSRUNTIMEHOST_POLYFILL_XMLHTTPREQUEST OR JSRUNTIMEHOST_POLYFILL_FETCH)
     set_property(TARGET UrlLib PROPERTY FOLDER Dependencies)
 endif()
 
-if((JSRUNTIMEHOST_POLYFILL_FILE OR JSRUNTIMEHOST_POLYFILL_FETCH) AND NOT TARGET base-n)
+if(JSRUNTIMEHOST_POLYFILL_FILE AND NOT TARGET base-n)
     FetchContent_MakeAvailable_With_Message(base-n)
     add_library(base-n INTERFACE)
     target_include_directories(base-n INTERFACE "${base-n_SOURCE_DIR}/include")
