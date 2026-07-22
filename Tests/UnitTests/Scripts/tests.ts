@@ -320,6 +320,24 @@ describe("fetch", function () {
         expect(await response.text()).to.equal("var symlink_target_js = true;");
     });
 
+    it("should resolve percent-encoded data URLs locally", async function () {
+        const url = "data:text/plain;charset=utf-8,hello%20native%20fetch%21";
+        const response = await fetch(url);
+        expect(response.ok).to.equal(true);
+        expect(response.status).to.equal(200);
+        expect(response.url).to.equal(url);
+        expect(response.headers.get("content-type")).to.equal("text/plain;charset=utf-8");
+        expect(await response.text()).to.equal("hello native fetch!");
+    });
+
+    it("should decode base64 data URLs without using the network transport", async function () {
+        const response = await fetch("data:application/octet-stream;base64,AAEC/w==");
+        expect(new Uint8Array(await response.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+        const blob = await response.blob();
+        expect(blob.type).to.equal("application/octet-stream");
+        expect(new Uint8Array(await blob.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+    });
+
     it("arrayBuffer() should return the body as bytes", async function () {
         const response = await fetch("app:///Scripts/symlink_target.js");
         const expected = new Uint8Array("var symlink_target_js = true;".split("").map(x => x.charCodeAt(0)));
