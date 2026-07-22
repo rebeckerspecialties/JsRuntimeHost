@@ -475,6 +475,47 @@ TEST(AppRuntime, DestroyDoesNotDeadlock)
     testThread.join();
 }
 
+#if defined(JSRUNTIMEHOST_APPLE_JAVASCRIPTCORE)
+TEST(NodeApi, ConcurrentJavaScriptCoreEnvironmentsInvokeNativeCallbacks)
+{
+    constexpr size_t runtimeCount{16};
+    std::promise<void> startPromise;
+    auto startFuture{startPromise.get_future().share()};
+    std::vector<std::future<bool>> runtimes;
+    runtimes.reserve(runtimeCount);
+
+    for (size_t index{0}; index < runtimeCount; ++index)
+    {
+        runtimes.emplace_back(std::async(std::launch::async, [startFuture]() {
+            startFuture.wait();
+
+            std::promise<bool> callbackPromise;
+            auto callbackFuture{callbackPromise.get_future()};
+            Babylon::AppRuntime runtime{};
+            runtime.Dispatch([&callbackPromise](Napi::Env env) {
+                auto callback{Napi::Function::New(env, [&callbackPromise](const Napi::CallbackInfo&) {
+                    callbackPromise.set_value(true);
+                })};
+                callback.Call({});
+            });
+
+            if (callbackFuture.wait_for(std::chrono::seconds{5}) != std::future_status::ready)
+            {
+                return false;
+            }
+            return callbackFuture.get();
+        }));
+    }
+
+    startPromise.set_value();
+    for (auto& runtime : runtimes)
+    {
+        ASSERT_EQ(runtime.wait_for(std::chrono::seconds{10}), std::future_status::ready);
+        EXPECT_TRUE(runtime.get());
+    }
+}
+#endif
+
 #if defined(JSRUNTIMEHOST_TEST_WORKER) && !defined(__ANDROID__)
 TEST(Worker, WebPlatformTests)
 {
