@@ -1,6 +1,10 @@
 #include "AppRuntime.h"
 #include <napi/env.h>
 
+#if __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 namespace Babylon
 {
     void AppRuntime::RunEnvironmentTier(const char*)
@@ -26,6 +30,11 @@ namespace Babylon
 
     void AppRuntime::DrainMicrotasks(Napi::Env)
     {
-        // JavaScriptCore drains microtasks automatically at script boundaries.
+        // JavaScriptCore drains Promise jobs at script boundaries, but Apple
+        // platform work such as asynchronous WebAssembly compilation completes
+        // through the current thread's run loop.
+#if __APPLE__
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true);
+#endif
     }
 }
