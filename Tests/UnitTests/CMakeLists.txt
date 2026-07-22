@@ -74,6 +74,7 @@ target_link_libraries(UnitTests
     PRIVATE Performance
     PRIVATE TextDecoder
     PRIVATE TextEncoder
+    PRIVATE Streams
     ${ADDITIONAL_LIBRARIES})
 
 if(TARGET Worker)
