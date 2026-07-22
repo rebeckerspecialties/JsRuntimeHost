@@ -52,6 +52,10 @@ if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 endif()
 
+if(APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_APPLE_JAVASCRIPTCORE)
+endif()
+
 target_link_libraries(UnitTests
     PRIVATE AppRuntime
     PRIVATE Console
