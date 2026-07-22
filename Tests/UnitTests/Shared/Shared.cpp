@@ -17,6 +17,7 @@
 #include <Babylon/Polyfills/Worker.h>
 #endif
 #include <Babylon/Polyfills/Streams.h>
+#include <Babylon/Polyfills/Compression.h>
 #include <gtest/gtest.h>
 #include <arcana/threading/blocking_concurrent_queue.h>
 #include <atomic>
@@ -282,6 +283,7 @@ TEST(JavaScript, All)
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
         Babylon::Polyfills::Fetch::Initialize(env);
+        Babylon::Polyfills::Compression::Initialize(env);
 
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
         Babylon::Polyfills::Worker::Options workerOptions{};
@@ -354,6 +356,30 @@ TEST(Fetch, PreservesHostClassesAndIsIdempotent)
         EXPECT_TRUE(global.Get("Headers").StrictEquals(hostHeaders));
         EXPECT_TRUE(global.Get("Response").StrictEquals(hostResponse));
         EXPECT_TRUE(global.Get("fetch").StrictEquals(installedFetch));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
+TEST(Compression, PreservesHostConstructorsAndIsIdempotent)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> done;
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostCompressionStream = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostCompressionStream");
+        global.Set("CompressionStream", hostCompressionStream);
+
+        Babylon::Polyfills::Compression::Initialize(env);
+        EXPECT_TRUE(global.Get("CompressionStream").StrictEquals(hostCompressionStream));
+        EXPECT_TRUE(global.Get("DecompressionStream").IsFunction());
+
+        const auto installedDecompressionStream = global.Get("DecompressionStream");
+        Babylon::Polyfills::Compression::Initialize(env);
+        EXPECT_TRUE(global.Get("CompressionStream").StrictEquals(hostCompressionStream));
+        EXPECT_TRUE(global.Get("DecompressionStream").StrictEquals(installedDecompressionStream));
         done.set_value();
     });
 
