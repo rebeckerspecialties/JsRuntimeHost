@@ -475,9 +475,7 @@ TEST(AppRuntime, DestroyDoesNotDeadlock)
     testThread.join();
 }
 
-#if defined(JSRUNTIMEHOST_TEST_WORKER) && !defined(__ANDROID__) && \
-    (defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE) || defined(JSR_NAPI_ENGINE_QUICKJS) || \
-     defined(JSR_NAPI_ENGINE_V8) || defined(JSR_NAPI_ENGINE_HERMES))
+#if defined(JSRUNTIMEHOST_TEST_WORKER) && !defined(__ANDROID__)
 TEST(Worker, WebPlatformTests)
 {
     struct Result
