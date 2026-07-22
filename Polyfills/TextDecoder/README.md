@@ -6,27 +6,28 @@ A C++ implementation of the [WHATWG Encoding API](https://encoding.spec.whatwg.o
 
 ### Supported
 
-- Decoding `Uint8Array`, `Int8Array`, and other typed array views from a UTF-8 encoded byte sequence.
+- Decoding `Uint8Array`, `Int8Array`, and other typed array views from UTF-8, UTF-16LE, and UTF-16BE byte sequences.
 - Decoding raw `ArrayBuffer` objects.
 - Constructing `TextDecoder` with no argument (defaults to `utf-8`).
-- Constructing `TextDecoder` with the explicit encoding label `"utf-8"` or `"UTF-8"`.
+- UTF-8 and UTF-16 labels defined by the Encoding Standard, including case and ASCII-whitespace normalization.
+- The normalized `encoding` property.
+- BOM removal and replacement characters for malformed UTF-16 input.
 - Calling `decode()` with no argument or `undefined` returns an empty string (matches the Web API).
 
 ### Not Supported
 
-- Encodings other than UTF-8 — passing any other label (e.g. `"utf-16"`, `"iso-8859-1"`) throws a JavaScript `Error`.
+- Legacy single-byte and multibyte encodings are not implemented.
 - `DataView` is not accepted by `decode()` — due to missing `Napi::DataView` support in the underlying JSI layer.
 - Passing a non-BufferSource value (e.g. a string or number) to `decode()` throws a `TypeError`.
 - The `fatal` option: decoding errors are not detected and do not throw a `TypeError`.
-- The `ignoreBOM` option: the byte order mark is not stripped.
+- The `ignoreBOM` option is not implemented; BOMs are stripped using the default behavior.
 - Streaming decode (passing `{ stream: true }` to `decode()`) — each call is stateless.
-- The `encoding` property on the `TextDecoder` instance is not exposed.
 
 ## Usage
 
 ```javascript
 const decoder = new TextDecoder();              // utf-8
-const decoder = new TextDecoder("utf-8");       // explicit, also fine
+const utf16Decoder = new TextDecoder("utf-16le");
 
 const bytes = new Uint8Array([72, 101, 108, 108, 111]);
 decoder.decode(bytes); // "Hello"
@@ -35,5 +36,5 @@ decoder.decode(bytes); // "Hello"
 Passing an unsupported encoding throws:
 
 ```javascript
-new TextDecoder("utf-16"); // Error: TextDecoder: unsupported encoding 'utf-16', only 'utf-8' is supported
+new TextDecoder("shift_jis"); // RangeError: TextDecoder: unsupported encoding 'shift_jis'
 ```
