@@ -446,7 +446,13 @@ namespace {
         return napi_set_last_error(env, napi_generic_failure);
       }
 
-      JSObjectRef function{JSObjectMakeFunctionWithCallback(env->context, JSString(utf8name), CallAsFunction)};
+      // `length` is a byte count and the name need not be null-terminated.
+      // The Node-API CTS deliberately passes "Name_extra" with length 5 and
+      // expects Function#name to be "Name_".
+      JSString functionName{
+        utf8name != nullptr ? utf8name : "",
+        utf8name != nullptr ? length : 0};
+      JSObjectRef function{JSObjectMakeFunctionWithCallback(env->context, functionName, CallAsFunction)};
       JSObjectRef sentinel{JSObjectMake(env->context, info->_class, info)};
       CHECK_NAPI(NativeInfo::Link<FunctionInfo>(env, function, sentinel));
 
@@ -561,16 +567,29 @@ namespace {
     static void Finalize(JSObjectRef object) {
       T* info = Get<T>(object);
       assert(info->Type() == TType);
-      for (const FinalizerT& finalizer : info->_finalizers) {
-        finalizer(info);
+      if (info->Env()->defer_finalizer_if_requested([info]() {
+            RunFinalizers(info);
+          })) {
+        // JSC invokes JSClass finalizers while the heap is collecting, where
+        // re-entering JavaScript is unsafe. Node-API finalizers are allowed to
+        // call back through Node-API, so the explicit test-GC path drains them
+        // immediately after the synchronous collection returns.
+        return;
       }
-      delete info;
+      RunFinalizers(info);
     }
 
     napi_env _env;
     void* _data{};
     std::vector<FinalizerT> _finalizers{};
     JSClassRef _class{};
+
+    static void RunFinalizers(T* info) {
+      for (const FinalizerT& finalizer : info->_finalizers) {
+        finalizer(info);
+      }
+      delete info;
+    }
   };
 
   class ExternalInfo: public BaseInfoT<ExternalInfo, NativeType::External> {
@@ -666,10 +685,20 @@ namespace {
       return napi_ok;
     }
 
+    bool IsWrapped() const {
+      return _wrapped;
+    }
+
+    void IsWrapped(bool wrapped) {
+      _wrapped = wrapped;
+    }
+
    private:
     WrapperInfo(napi_env env)
       : BaseInfoT{env, "Native (Wrapper)"} {
     }
+
+    bool _wrapped{};
   };
 
   class ExternalArrayBufferInfo {
@@ -835,6 +864,20 @@ void napi_env__::deinit_refs() {
   }
 }
 
+void napi_env__::delete_remaining_refs() {
+  // Addons may delete wrap-owned references from their finalizers while
+  // JSGlobalContextRelease tears down the heap. Keep every reference tracked
+  // until that teardown has run, then reclaim only the references the addon
+  // left behind. Deleting strong references before context teardown would
+  // make a finalizer's napi_delete_reference double-free them; never deleting
+  // the leftovers leaks references whose finalizer deliberately does not.
+  assert(strong_refs.empty());
+  for (napi_ref ref : refs) {
+    delete ref;
+  }
+  refs.clear();
+}
+
 void napi_env__::init_symbol(JSValueRef &symbol, const char *description) {
   symbol = JSValueMakeSymbol(context, JSString(description));
   JSValueProtect(context, symbol);
@@ -908,6 +951,7 @@ napi_status napi_create_function(napi_env env,
                                  void* callback_data,
                                  napi_value* result) {
   CHECK_ENV(env);
+  CHECK_ARG(env, cb);
   CHECK_ARG(env, result);
 
   CHECK_NAPI(FunctionInfo::Create(env, utf8name, length, cb, callback_data, result));
@@ -1994,8 +2038,9 @@ napi_status napi_wrap(napi_env env,
 
   WrapperInfo* info{};
   CHECK_NAPI(WrapperInfo::Wrap(env, js_object, &info));
-  RETURN_STATUS_IF_FALSE(env, info->Data() == nullptr, napi_invalid_arg);
+  RETURN_STATUS_IF_FALSE(env, !info->IsWrapped(), napi_invalid_arg);
 
+  info->IsWrapped(true);
   info->Data(native_object);
 
   if (finalize_cb != nullptr) {
@@ -2017,7 +2062,7 @@ napi_status napi_unwrap(napi_env env, napi_value js_object, void** result) {
 
   WrapperInfo* info{};
   CHECK_NAPI(WrapperInfo::Unwrap(env, js_object, &info));
-  RETURN_STATUS_IF_FALSE(env, info != nullptr && info->Data() != nullptr, napi_invalid_arg);
+  RETURN_STATUS_IF_FALSE(env, info != nullptr && info->IsWrapped(), napi_invalid_arg);
 
   *result = info->Data();
   return napi_ok;
@@ -2027,17 +2072,16 @@ napi_status napi_remove_wrap(napi_env env, napi_value js_object, void** result) 
   CHECK_ENV(env);
   CHECK_ARG(env, js_object);
 
-  // REVIEW: Should we remove the wrapper if we are removing finalizers anyway?
-
   WrapperInfo* info{};
   CHECK_NAPI(WrapperInfo::Unwrap(env, js_object, &info));
-  RETURN_STATUS_IF_FALSE(env, info != nullptr && info->Data() != nullptr, napi_invalid_arg);
+  RETURN_STATUS_IF_FALSE(env, info != nullptr && info->IsWrapped(), napi_invalid_arg);
 
   if (result)
   {
     *result = info->Data();
   }
 
+  info->IsWrapped(false);
   info->Data(nullptr);
   info->RemoveFinalizers();
 
@@ -2075,12 +2119,35 @@ napi_status napi_create_reference(napi_env env,
   CHECK_ARG(env, value);
   CHECK_ARG(env, result);
 
+  // References are backed by metadata attached to a JavaScript object.
+  // Reject unsupported primitives before ReferenceInfo calls ToJSObject():
+  // that conversion asserts, while node-addon-api deliberately probes this
+  // API and wraps a non-object pending exception when it is rejected.
+  //
+  // This is especially important for JavaScriptCore's watchdog termination
+  // exception. WebKit represents it as the string "JavaScript execution
+  // terminated.", so attempting to persist it as an object would abort the
+  // host while stopping a tight-loop Worker.
+  // https://github.com/WebKit/WebKit/blob/46327f724be09f4b27c1c72b9dd083ca34d6abcc/Source/JavaScriptCore/API/tests/ExecutionTimeLimitTest.cpp
+  napi_valuetype value_type{};
+  CHECK_NAPI(napi_typeof(env, value, &value_type));
+  if (value_type != napi_object &&
+      value_type != napi_function &&
+      value_type != napi_external) {
+    return napi_set_last_error(env, napi_object_expected);
+  }
+
   napi_ref__* ref{new napi_ref__{}};
   if (ref == nullptr) {
     return napi_set_last_error(env, napi_generic_failure);
   }
 
-  ref->init(env, value, initial_refcount);
+  const napi_status status{ref->init(env, value, initial_refcount)};
+  if (status != napi_ok) {
+    delete ref;
+    return status;
+  }
+  env->track_ref(ref);
   *result = ref;
 
   return napi_ok;
@@ -2092,6 +2159,7 @@ napi_status napi_delete_reference(napi_env env, napi_ref ref) {
   CHECK_ENV(env);
   CHECK_ARG(env, ref);
 
+  env->untrack_ref(ref);
   ref->deinit(env);
   delete ref;
 

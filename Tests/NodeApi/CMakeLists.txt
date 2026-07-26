@@ -16,8 +16,6 @@ set(JSR_NODE_API_NATIVE_TEST_DIRS
     #   test_reference      -> node_api_symbol_for (v9)
     #   test_finalizer/     -> napi_get_instance_data (v6), node_api_basic_env / node_api_post_finalizer (v9)
     #   6_object_wrap       -> napi_get_instance_data (v6), node_api_basic_env (v9)
-    # (test_reference_double_free/test_wrap.js is quarantined in test_main.cpp -- a JSC remove_wrap
-    #  edge case that returns napi_invalid_arg; tracked as a separate fix, not a v5 blocker.)
     test_reference_double_free
 )
 

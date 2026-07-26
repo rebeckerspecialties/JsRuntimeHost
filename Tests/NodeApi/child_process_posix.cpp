@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__ANDROID__)
@@ -111,6 +112,17 @@ ProcessResult SpawnSync(std::string_view command,
   close(stdout_pipe[1]);
   close(stderr_pipe[1]);
 
+  // Drain both pipes while the child is running. Waiting first can deadlock
+  // once either pipe fills (sanitizer diagnostics routinely exceed the pipe
+  // capacity), because the child cannot exit and the parent never starts
+  // reading.
+  std::thread stdout_reader{[&result, fd = stdout_pipe[0]]() {
+    result.std_output = ReadFromFd(fd);
+  }};
+  std::thread stderr_reader{[&result, fd = stderr_pipe[0]]() {
+    result.std_error = ReadFromFd(fd);
+  }};
+
   int wait_status;
   pid_t waited_pid;
   do {
@@ -118,6 +130,8 @@ ProcessResult SpawnSync(std::string_view command,
   } while (waited_pid == -1 && errno == EINTR);
 
   VerifyElseExit(waited_pid == pid);
+  stdout_reader.join();
+  stderr_reader.join();
 
   if (WIFEXITED(wait_status)) {
     result.status = WEXITSTATUS(wait_status);
@@ -126,8 +140,6 @@ ProcessResult SpawnSync(std::string_view command,
   } else {
     result.status = 1;
   }
-  result.std_output = ReadFromFd(stdout_pipe[0]);
-  result.std_error = ReadFromFd(stderr_pipe[0]);
 
   // Close the read ends of the pipes.
   close(stdout_pipe[0]);

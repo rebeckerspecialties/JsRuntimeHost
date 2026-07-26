@@ -3,9 +3,14 @@
 #include <napi/js_native_api.h>
 #include <napi/js_native_api_types.h>
 #include <JavaScriptCore/JavaScript.h>
+#include <functional>
 #include <unordered_map>
+#include <unordered_set>
 #include <list>
+#include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <cassert>
 
 struct napi_env__ {
@@ -43,6 +48,7 @@ struct napi_env__ {
     deinit_symbol(function_info_symbol);
     deinit_symbol(constructor_info_symbol);
     JSGlobalContextRelease(context);
+    delete_remaining_refs();
     napi_envs.erase(context);
   }
 
@@ -55,10 +61,54 @@ struct napi_env__ {
     }
   }
 
+  void set_defer_finalizers(bool defer) {
+    std::lock_guard<std::mutex> lock{deferred_finalizers_mutex};
+    defer_finalizers = defer;
+  }
+
+  template<typename TCallback>
+  bool defer_finalizer_if_requested(TCallback&& callback) {
+    std::lock_guard<std::mutex> lock{deferred_finalizers_mutex};
+    if (!defer_finalizers) {
+      return false;
+    }
+    deferred_finalizers.emplace_back(std::forward<TCallback>(callback));
+    return true;
+  }
+
+  void drain_deferred_finalizers() {
+    for (;;) {
+      std::vector<std::function<void()>> finalizers;
+      {
+        std::lock_guard<std::mutex> lock{deferred_finalizers_mutex};
+        if (deferred_finalizers.empty()) {
+          return;
+        }
+        finalizers.swap(deferred_finalizers);
+      }
+      for (auto& finalizer : finalizers) {
+        finalizer();
+      }
+    }
+  }
+
+  void track_ref(napi_ref ref) {
+    refs.insert(ref);
+  }
+
+  void untrack_ref(napi_ref ref) {
+    refs.erase(ref);
+  }
+
  private:
   static inline std::unordered_map<JSGlobalContextRef, napi_env> napi_envs{};
+  std::unordered_set<napi_ref> refs{};
+  std::mutex deferred_finalizers_mutex{};
+  bool defer_finalizers{false};
+  std::vector<std::function<void()>> deferred_finalizers{};
 
   void deinit_refs();
+  void delete_remaining_refs();
   void init_symbol(JSValueRef& symbol, const char* description);
   void init_function_prototype_call();
   void deinit_symbol(JSValueRef symbol);

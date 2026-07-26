@@ -51,6 +51,13 @@ TEST_F(BasicsTest, TestThrowString) {
   ASSERT_TRUE(StringContains(result.std_error, "Script failed"));
 }
 
+TEST_F(BasicsTest, TestLargeOutputDoesNotDeadlock) {
+  ProcessResult result = RunScript("large_output.js");
+  ASSERT_EQ(result.status, 0);
+  ASSERT_TRUE(StringContains(result.std_output, "stdout-end"));
+  ASSERT_TRUE(StringContains(result.std_error, "stderr-end"));
+}
+
 TEST_F(BasicsTest, TestAsyncResolved) {
   ProcessResult result = RunScript("async_resolved.js");
   ASSERT_TRUE(StringContains(result.std_output, "test async calling"));

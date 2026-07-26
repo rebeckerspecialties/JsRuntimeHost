@@ -6,6 +6,11 @@
 #if defined(__APPLE__)
 #include <JavaScriptCore/JavaScript.h>
 #include "js_native_api_javascriptcore.h"
+
+// Exported by JavaScriptCore but intentionally kept out of the public header.
+// It is the API used here to implement Node's explicit --expose-gc testing
+// hook; JSGarbageCollect() no longer performs a synchronous collection.
+extern "C" void JSSynchronousGarbageCollectForDebugging(JSContextRef);
 #elif defined(__ANDROID__)
 #include <v8.h>
 #include "js_native_api_v8.h"
@@ -81,7 +86,14 @@ napi_status jsr_collect_garbage(napi_env env) {
     return napi_invalid_arg;
   }
 
-  JSGarbageCollect(context);
+  // JSGarbageCollect only calls reportAbandonedObjectGraph() in current
+  // WebKit; it does not synchronously collect. The Node-API suite expects one
+  // global.gc() call to run an unreachable napi_wrap finalizer.
+  // https://github.com/WebKit/WebKit/blob/main/Source/JavaScriptCore/API/JSBase.cpp
+  env->set_defer_finalizers(true);
+  JSSynchronousGarbageCollectForDebugging(context);
+  env->set_defer_finalizers(false);
+  env->drain_deferred_finalizers();
   return napi_ok;
 #elif defined(__ANDROID__)
   if (env == nullptr) {
