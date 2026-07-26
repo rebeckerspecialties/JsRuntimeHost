@@ -276,12 +276,12 @@ TEST(JavaScript, All)
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::WebSocket::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
-        Babylon::Polyfills::Fetch::Initialize(env);
+        Babylon::Polyfills::Streams::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
         Babylon::Polyfills::File::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
-        Babylon::Polyfills::Streams::Initialize(env);
+        Babylon::Polyfills::Fetch::Initialize(env);
         Babylon::Polyfills::Compression::Initialize(env);
 
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
@@ -357,6 +357,34 @@ TEST(Compression, PreservesHostConstructorsAndIsIdempotent)
 
     done.get_future().get();
 }
+
+TEST(Fetch, PreservesHostClassesAndIsIdempotent)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> done;
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostHeaders = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostHeaders");
+        const auto hostResponse = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostResponse");
+        global.Set("Headers", hostHeaders);
+        global.Set("Response", hostResponse);
+
+        Babylon::Polyfills::Fetch::Initialize(env);
+        EXPECT_TRUE(global.Get("Headers").StrictEquals(hostHeaders));
+        EXPECT_TRUE(global.Get("Response").StrictEquals(hostResponse));
+
+        const auto installedFetch = global.Get("fetch");
+        Babylon::Polyfills::Fetch::Initialize(env);
+        EXPECT_TRUE(global.Get("Headers").StrictEquals(hostHeaders));
+        EXPECT_TRUE(global.Get("Response").StrictEquals(hostResponse));
+        EXPECT_TRUE(global.Get("fetch").StrictEquals(installedFetch));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
 TEST(Console, Log)
 {
     Babylon::AppRuntime runtime{};
