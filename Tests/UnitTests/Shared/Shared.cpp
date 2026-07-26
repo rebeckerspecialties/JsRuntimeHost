@@ -13,6 +13,7 @@
 #include <Babylon/Polyfills/File.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/Streams.h>
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
 #include <Babylon/Polyfills/Worker.h>
 #endif
@@ -279,6 +280,7 @@ TEST(JavaScript, All)
         Babylon::Polyfills::File::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
+        Babylon::Polyfills::Streams::Initialize(env);
 
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
         Babylon::Polyfills::Worker::Options workerOptions{};
@@ -304,6 +306,30 @@ TEST(JavaScript, All)
     auto exitCode{exitCodePromise.get_future().get()};
 
     EXPECT_EQ(exitCode, 0);
+}
+
+TEST(Streams, PreservesHostConstructorsAndIsIdempotent)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> done;
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostReadableStream = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostReadableStream");
+        global.Set("ReadableStream", hostReadableStream);
+
+        Babylon::Polyfills::Streams::Initialize(env);
+        EXPECT_TRUE(global.Get("ReadableStream").StrictEquals(hostReadableStream));
+        EXPECT_TRUE(global.Get("TransformStream").IsFunction());
+
+        const auto installedTransformStream = global.Get("TransformStream");
+        Babylon::Polyfills::Streams::Initialize(env);
+        EXPECT_TRUE(global.Get("ReadableStream").StrictEquals(hostReadableStream));
+        EXPECT_TRUE(global.Get("TransformStream").StrictEquals(installedTransformStream));
+        done.set_value();
+    });
+
+    done.get_future().get();
 }
 
 TEST(Console, Log)
