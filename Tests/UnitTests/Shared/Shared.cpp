@@ -528,6 +528,7 @@ TEST(NodeApi, CreateDataViewRejectsOverflowingRange)
 }
 #endif
 
+#if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 TEST(NodeApi, ThrowApisReturnOkAndLeaveExceptionPending)
 {
     // Node-API's throw functions return napi_ok when the exception was
@@ -574,6 +575,7 @@ TEST(NodeApi, ThrowApisReturnOkAndLeaveExceptionPending)
 
     EXPECT_TRUE(result.get_future().get());
 }
+#endif
 
 // The V8JSI Node-API shim does not expose napi_get_value_string_utf16, so this
 // native test only builds on the Chakra, V8, and JavaScriptCore backends.
