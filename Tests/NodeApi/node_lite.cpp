@@ -614,6 +614,24 @@ void NodeLiteRuntime::DefineGlobalFunctions() {
   NodeApi::SetMethod(
       env_, global, "gc", [](napi_env env, span<napi_value> /*args*/) {
         NODE_LITE_CALL(jsr_collect_garbage(env));
+#if defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
+        // JSC conservatively scans the active native stack. The value made
+        // unreachable immediately before global.gc() can therefore remain
+        // pinned by the callback/evaluation frames that requested the
+        // collection. Queue one follow-up collection after those frames have
+        // unwound; RunTestScript drains this queue before process "exit"
+        // callbacks run their mustCall checks.
+        //
+        // This is deliberately a NodeLite/JSC test-host behavior, not a
+        // production scheduling change. Other engines complete their explicit
+        // collection synchronously and do not need the second pass.
+        GetRuntime(env)->task_runner_->PostTask([env]() {
+          ExitOnException(env, [env]() {
+            NodeApiHandleScope scope{env};
+            NODE_LITE_CALL(jsr_collect_garbage(env));
+          });
+        });
+#endif
         return nullptr;
       });
 
