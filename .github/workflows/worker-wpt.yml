@@ -15,9 +15,15 @@ jobs:
       cxx: clang++
       enable-sanitizers: true
 
-  Ubuntu_JSC_ThreadSanitizer:
+  Ubuntu_QuickJS_ThreadSanitizer:
     uses: ./.github/workflows/build-linux.yml
     with:
       cc: clang
       cxx: clang++
+      # Linux JSC suspends mutator threads with SIGUSR1. TSan intercepts the
+      # signal and deadlocks inside the uninstrumented system library, even
+      # with concurrent GC disabled. QuickJS still exercises the instrumented
+      # Worker ownership, message queues, and teardown paths without hiding
+      # host races behind an incompatible third-party runtime.
+      js-engine: QuickJS
       enable-thread-sanitizer: true
