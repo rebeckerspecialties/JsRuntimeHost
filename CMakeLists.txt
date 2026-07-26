@@ -109,6 +109,7 @@ option(JSRUNTIMEHOST_POLYFILL_STREAMS "Include JsRuntimeHost Polyfill Web Stream
 option(JSRUNTIMEHOST_POLYFILL_STREAMS "Include JsRuntimeHost Polyfill Web Streams." ON)
 option(JSRUNTIMEHOST_POLYFILL_COMPRESSION "Include JsRuntimeHost Polyfills CompressionStream and DecompressionStream." ON)
 option(JSRUNTIMEHOST_POLYFILL_WORKER "Include JsRuntimeHost Polyfill Worker." ON)
+option(JSRUNTIMEHOST_POLYFILL_INDEXEDDB "Include JsRuntimeHost Polyfill IndexedDB." ON)
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
