@@ -245,6 +245,24 @@ add_dependencies(NodeApiTests NodeApiModules)
 
 add_subdirectory(test)
 
+# Babel rewrites current CTS sources to import @babel/runtime helpers. With a
+# single-config generator the runner and generated test tree share this binary
+# directory, but Xcode and Visual Studio place each runner one configuration
+# level deeper. Stage the runtime dependency beside those runners so module
+# resolution is identical on every generator.
+if(CMAKE_CONFIGURATION_TYPES)
+    foreach(nodeApiRunner node_lite NodeApiTests)
+        add_custom_command(TARGET ${nodeApiRunner} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${nodeApiRunner}>/test/node_modules/@babel"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${NODE_API_TRANSFORMED_JS_BINARY_DIR}/node_modules/@babel/runtime"
+                "$<TARGET_FILE_DIR:${nodeApiRunner}>/test/node_modules/@babel/runtime"
+            COMMENT "Copying Babel runtime for ${nodeApiRunner}"
+            VERBATIM)
+    endforeach()
+endif()
+
 # node_api_copy_test_sources() first stages the complete source tree (native
 # module layout and non-JS fixtures included). Overlay Babel's generated JS and
 # source maps afterward. add_custom_command(TARGET) must be called from the

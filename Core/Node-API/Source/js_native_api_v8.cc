@@ -357,18 +357,29 @@ inline napi_status Unwrap(napi_env env,
   v8::Local<v8::Value> value = v8impl::V8LocalValueFromJsValue(js_object);
   RETURN_STATUS_IF_FALSE(env, value->IsObject(), napi_invalid_arg);
   v8::Local<v8::Object> obj = value.As<v8::Object>();
-  
-  // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-  Reference* reference =
-      static_cast<v8impl::Reference*>(obj->GetAlignedPointerFromInternalField(0));
+
+  // Node-API permits wrapping any object, including plain object literals
+  // without V8 internal fields. Match Node's V8 adapter by keeping the native
+  // reference in an engine-private property.
+  auto maybe_value =
+      obj->GetPrivate(context, NAPI_WRAPPER_PRIVATE_KEY(context));
+  CHECK_MAYBE_EMPTY(env, maybe_value, napi_generic_failure);
+  v8::Local<v8::Value> wrapped_value = maybe_value.ToLocalChecked();
+  RETURN_STATUS_IF_FALSE(env, wrapped_value->IsExternal(), napi_invalid_arg);
+  Reference* reference = static_cast<v8impl::Reference*>(
+      wrapped_value.As<v8::External>()->Value());
+  RETURN_STATUS_IF_FALSE(env, reference != nullptr, napi_invalid_arg);
 
   if (result) {
     *result = reference->Data();
   }
 
   if (action == RemoveWrap) {
-    // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-    obj->SetAlignedPointerInInternalField(0, nullptr);
+    auto maybe_deleted =
+        obj->DeletePrivate(context, NAPI_WRAPPER_PRIVATE_KEY(context));
+    CHECK_MAYBE_NOTHING(env, maybe_deleted, napi_generic_failure);
+    RETURN_STATUS_IF_FALSE(
+        env, maybe_deleted.FromJust(), napi_generic_failure);
     if (reference->ownership() == Ownership::kUserland) {
       // When the wrap is been removed, the finalizer should be reset.
       reference->ResetFinalizer();
@@ -567,6 +578,11 @@ inline napi_status Wrap(napi_env env,
   RETURN_STATUS_IF_FALSE(env, value->IsObject(), napi_invalid_arg);
   v8::Local<v8::Object> obj = value.As<v8::Object>();
 
+  auto maybe_has =
+      obj->HasPrivate(context, NAPI_WRAPPER_PRIVATE_KEY(context));
+  CHECK_MAYBE_NOTHING(env, maybe_has, napi_generic_failure);
+  RETURN_STATUS_IF_FALSE(env, !maybe_has.FromJust(), napi_invalid_arg);
+
   v8impl::Reference* reference = nullptr;
   if (result != nullptr) {
     // The returned reference should be deleted via napi_delete_reference()
@@ -594,8 +610,17 @@ inline napi_status Wrap(napi_env env,
         finalize_cb == nullptr ? nullptr : finalize_hint);
   }
 
-  // [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-  obj->SetAlignedPointerInInternalField(0, reference);
+  auto maybe_set = obj->SetPrivate(
+      context,
+      NAPI_WRAPPER_PRIVATE_KEY(context),
+      v8::External::New(env->isolate, reference));
+  if (maybe_set.IsNothing() || !maybe_set.FromJust()) {
+    if (result != nullptr) {
+      *result = nullptr;
+    }
+    delete reference;
+    return napi_set_last_error(env, napi_generic_failure);
+  }
 
   return GET_RETURN_STATUS(env);
 }

@@ -75,8 +75,23 @@ public:
 #define CHECK_LE(a, b) CHECK((a) <= (b))
 #endif
 
-// [BABYLON-NATIVE-ADDITION]: Increase perf by using internal field instead of private property
-//#define NAPI_PRIVATE_KEY(context)                                      \
-//  (v8::Private::New(context->GetIsolate()))
+inline v8::Local<v8::Private> NapiPrivateKey(
+    v8::Local<v8::Context> context,
+    const char* name,
+    size_t length) {
+  v8::Isolate* isolate = context->GetIsolate();
+  return v8::Private::ForApi(
+      isolate, OneByteString(isolate, name, static_cast<int>(length)));
+}
+
+#define NAPI_PRIVATE_KEY(context)                                         \
+  NapiPrivateKey((context),                                               \
+                 "BabylonNative_NodeApiTypeTag",                          \
+                 sizeof("BabylonNative_NodeApiTypeTag") - 1)
+
+#define NAPI_WRAPPER_PRIVATE_KEY(context)                                 \
+  NapiPrivateKey((context),                                               \
+                 "BabylonNative_NodeApiWrapper",                          \
+                 sizeof("BabylonNative_NodeApiWrapper") - 1)
 
 #endif  // SRC_JS_NATIVE_API_V8_INTERNALS_H_
