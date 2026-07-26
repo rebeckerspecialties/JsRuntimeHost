@@ -11,6 +11,7 @@
 #include <Babylon/Polyfills/Fetch.h>
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/File.h>
+#include <Babylon/Polyfills/IndexedDB.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
 #include <Babylon/Polyfills/Streams.h>
@@ -283,6 +284,7 @@ TEST(JavaScript, All)
         Babylon::Polyfills::TextEncoder::Initialize(env);
         Babylon::Polyfills::Fetch::Initialize(env);
         Babylon::Polyfills::Compression::Initialize(env);
+        Babylon::Polyfills::IndexedDB::Initialize(env);
 
 #if defined(JSRUNTIMEHOST_TEST_WORKER)
         Babylon::Polyfills::Worker::Options workerOptions{};
@@ -374,6 +376,27 @@ TEST(Compression, PreservesHostConstructorsAndIsIdempotent)
         Babylon::Polyfills::Compression::Initialize(env);
         EXPECT_TRUE(global.Get("CompressionStream").StrictEquals(hostCompressionStream));
         EXPECT_TRUE(global.Get("DecompressionStream").StrictEquals(installedDecompressionStream));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
+TEST(IndexedDB, PreservesHostImplementation)
+{
+    std::promise<void> done;
+    Babylon::AppRuntime runtime{};
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        auto hostIndexedDB = Napi::Object::New(env);
+        global.Set("indexedDB", hostIndexedDB);
+
+        Babylon::Polyfills::IndexedDB::Initialize(env);
+        EXPECT_TRUE(global.Get("indexedDB").StrictEquals(hostIndexedDB));
+
+        Babylon::Polyfills::IndexedDB::Initialize(env);
+        EXPECT_TRUE(global.Get("indexedDB").StrictEquals(hostIndexedDB));
         done.set_value();
     });
 
