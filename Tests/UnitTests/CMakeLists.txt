@@ -71,6 +71,7 @@ target_link_libraries(UnitTests
     PRIVATE TextDecoder
     PRIVATE TextEncoder
     PRIVATE Streams
+    PRIVATE Compression
     ${ADDITIONAL_LIBRARIES})
 
 if(TARGET Worker)
