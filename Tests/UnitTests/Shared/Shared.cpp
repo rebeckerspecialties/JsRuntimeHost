@@ -13,11 +13,15 @@
 #include <Babylon/Polyfills/File.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+#include <Babylon/Polyfills/Worker.h>
+#endif
 #include <gtest/gtest.h>
 #include <arcana/threading/blocking_concurrent_queue.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <future>
 #include <iostream>
 #include <thread>
@@ -31,7 +35,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <fstream>
-#include <filesystem>
 #include <system_error>
 
 #include <AndroidExtensions/Globals.h>
@@ -277,6 +280,12 @@ TEST(JavaScript, All)
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
 
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+        Babylon::Polyfills::Worker::Options workerOptions{};
+        workerOptions.ScriptRoot = std::filesystem::current_path().string();
+        Babylon::Polyfills::Worker::Initialize(env, std::move(workerOptions));
+#endif
+
         auto setExitCodeCallback = Napi::Function::New(
             env, [&exitCodePromise](const Napi::CallbackInfo& info) {
                 Napi::Env env = info.Env();
@@ -464,6 +473,74 @@ TEST(AppRuntime, DestroyDoesNotDeadlock)
 
     testThread.join();
 }
+
+#if defined(JSRUNTIMEHOST_TEST_WORKER) && !defined(__ANDROID__) && \
+    (defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE) || defined(JSR_NAPI_ENGINE_QUICKJS) || \
+     defined(JSR_NAPI_ENGINE_V8) || defined(JSR_NAPI_ENGINE_HERMES))
+TEST(Worker, WebPlatformTests)
+{
+    struct Result
+    {
+        bool Passed{};
+        std::string Detail{};
+    };
+
+    std::promise<Result> completion;
+    std::atomic_bool completed{false};
+
+    Babylon::AppRuntime::Options runtimeOptions{};
+    runtimeOptions.UnhandledExceptionHandler = [&completion, &completed](const Napi::Error& error) {
+        if (!completed.exchange(true))
+        {
+            completion.set_value({false, Napi::GetErrorString(error)});
+        }
+    };
+
+    Babylon::AppRuntime runtime{std::move(runtimeOptions)};
+    runtime.Dispatch([&completion, &completed](Napi::Env env) {
+        Babylon::Polyfills::Scheduling::Initialize(env);
+
+        Babylon::Polyfills::Worker::Options options{};
+        options.ScriptRoot = (std::filesystem::current_path() / "WebPlatformTests").string();
+        options.ConsoleCallback = [](const char* message) {
+            std::cerr << "[Worker] " << message << std::endl;
+        };
+        Babylon::Polyfills::Worker::Initialize(env, std::move(options));
+
+#if defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
+        // System JSC exposes the execution-time-limit hook used to interrupt
+        // a worker stuck in top-level evaluation. Other adapters currently
+        // terminate cooperatively between dispatches, so the infinite-loop
+        // WPT regression is intentionally JSC-only for now.
+        env.Global().Set("__jsrhCanInterruptWorker", Napi::Boolean::New(env, true));
+#else
+        env.Global().Set("__jsrhCanInterruptWorker", Napi::Boolean::New(env, false));
+#endif
+
+        env.Global().Set("__jsrhWptDone", Napi::Function::New(
+            env,
+            [&completion, &completed](const Napi::CallbackInfo& info) {
+                if (!completed.exchange(true))
+                {
+                    completion.set_value({
+                        info[0].ToBoolean().Value(),
+                        info[1].ToString().Utf8Value(),
+                    });
+                }
+            },
+            "__jsrhWptDone"));
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    loader.LoadScript("app:///WebPlatformTests/runner.js");
+
+    auto future = completion.get_future();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds{90}), std::future_status::ready)
+        << "Worker WPT subset timed out";
+    const auto result = future.get();
+    EXPECT_TRUE(result.Passed) << result.Detail;
+}
+#endif
 
 // The V8JSI Node-API shim does not implement napi_create_dataview /
 // napi_get_dataview_info (its DataView::New throws "TODO"), so this native test
