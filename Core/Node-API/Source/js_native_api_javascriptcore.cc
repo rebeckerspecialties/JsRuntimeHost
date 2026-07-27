@@ -1997,6 +1997,16 @@ napi_status napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
   CHECK_JSC(env, exception);
   JSObjectCallAsFunction(env->context, transferFn, ab, 0, nullptr, &exception);  // detaches `ab`
   CHECK_JSC(env, exception);
+
+  // Some JSC C-API builds keep an ArrayBuffer attached after its backing
+  // pointer has been exposed to native code. Node-API permits engines to impose
+  // detachability conditions, but a successful status must mean the requested
+  // detach actually happened.
+  bool detached = false;
+  CHECK_NAPI(napi_is_detached_arraybuffer(env, arraybuffer, &detached));
+  if (!detached) {
+    return napi_set_last_error(env, napi_detachable_arraybuffer_expected);
+  }
   return napi_ok;
 }
 
