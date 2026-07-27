@@ -70,12 +70,33 @@ target_link_libraries(UnitTests
     PRIVATE Performance
     PRIVATE TextDecoder
     PRIVATE TextEncoder
+    PRIVATE Streams
+    PRIVATE Compression
+    PRIVATE IndexedDB
     ${ADDITIONAL_LIBRARIES})
+
+if(TARGET Worker)
+    target_link_libraries(UnitTests PRIVATE Worker)
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_TEST_WORKER=1)
+endif()
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET UnitTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:UnitTests>>,copy,true> $<TARGET_RUNTIME_DLLS:UnitTests> $<TARGET_FILE_DIR:UnitTests> COMMAND_EXPAND_LISTS)
+
+if(TARGET Worker)
+    add_custom_command(TARGET UnitTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests"
+            "$<TARGET_FILE_DIR:UnitTests>/WebPlatformTests"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:UnitTests>/workers/support"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests/workers/support/visualization-worker-cache.json"
+            "$<TARGET_FILE_DIR:UnitTests>/workers/support/visualization-worker-cache.json"
+        COMMENT "Copying focused Worker conformance regressions")
+endif()
 
 if(APPLE)
     enable_objc_arc(UnitTests)

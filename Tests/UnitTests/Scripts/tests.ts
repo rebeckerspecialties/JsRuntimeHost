@@ -88,6 +88,12 @@ describe("AbortController", function () {
         expect((controller.signal as any).reason).to.equal(reason);
     });
 
+    it("abort(reason) records a primitive reason", function () {
+        const controller = new AbortController();
+        controller.abort("custom reason");
+        expect((controller.signal as any).reason).to.equal("custom reason");
+    });
+
     it("abort() with no reason defaults to an AbortError", function () {
         const controller = new AbortController();
         controller.abort();
@@ -293,11 +299,321 @@ describe("XMLHTTPRequest", function () {
     });
 });
 
+describe("Headers", function () {
+    // Focused ports from WPT fetch/api/headers.
+    it("normalizes names and values and combines repeated fields", function () {
+        const headers = new Headers([
+            ["X-Test", "  first\t"],
+            ["x-test", "second"],
+            ["X-Other", "\r\n value \n"]
+        ]);
+        expect(headers.get("X-TEST")).to.equal("first, second");
+        expect(headers.get("x-other")).to.equal("value");
+        expect(Array.from(headers.keys())).to.deep.equal(["x-other", "x-test"]);
+    });
+
+    it("validates sequence shape and HTTP ByteStrings", function () {
+        expect(() => new Headers(null as any)).to.throw();
+        expect(() => new Headers([["missing-value"]] as any)).to.throw();
+        expect(() => new Headers([["too", "many", "values"]] as any)).to.throw();
+        expect(() => new Headers([["invalid name", "value"]])).to.throw();
+        expect(() => new Headers([["valid", "a\0b"]])).to.throw();
+        expect(() => new Headers([["invalidĀ", "value"]])).to.throw();
+    });
+
+    it("preserves Set-Cookie fields while combining other duplicates", function () {
+        const headers = new Headers([
+            ["set-cookie", "a=1"],
+            ["x-value", "first"],
+            ["Set-Cookie", "b=2"],
+            ["X-Value", "second"]
+        ]);
+        expect(headers.getSetCookie()).to.deep.equal(["a=1", "b=2"]);
+        expect(Array.from(headers)).to.deep.equal([
+            ["set-cookie", "a=1"],
+            ["set-cookie", "b=2"],
+            ["x-value", "first, second"]
+        ]);
+    });
+
+    it("keeps iteration live when headers are changed", function () {
+        const headers = new Headers({ bar: "0", baz: "1", foo: "2" });
+        const seen: string[] = [];
+        for (const [name] of headers) {
+            seen.push(name);
+            headers.delete("foo");
+        }
+        expect(seen).to.deep.equal(["bar", "baz"]);
+    });
+
+    it("copies an initializer and honors a custom iterator", function () {
+        const source = new Headers({ ignored: "value" });
+        source[Symbol.iterator] = function* () {
+            yield ["custom", "value"];
+        };
+        const copy = new Headers(source);
+        source.set("custom", "changed");
+        expect(Array.from(copy)).to.deep.equal([["custom", "value"]]);
+    });
+});
+
+describe("Response", function () {
+    // Focused ports from WPT fetch/api/response.
+    it("exposes browser defaults and validates response metadata", function () {
+        const response = new Response();
+        expect(String(response)).to.equal("[object Response]");
+        expect(response.status).to.equal(200);
+        expect(response.statusText).to.equal("");
+        expect(response.ok).to.equal(true);
+        expect(response.type).to.equal("default");
+        expect(response.url).to.equal("");
+        expect(response.body).to.equal(null);
+        expect(response.headers).to.equal(response.headers);
+
+        expect(() => new Response("", { status: 199 })).to.throw(RangeError);
+        expect(() => new Response("", { status: 600 })).to.throw(RangeError);
+        expect(() => new Response("", { statusText: "bad\ntext" })).to.throw(TypeError);
+        expect(() => new Response("body", { status: 204 })).to.throw(TypeError);
+    });
+
+    it("streams strings and consumes a body only once", async function () {
+        const response = new Response("streamed text");
+        expect(response.body).to.be.instanceOf(ReadableStream);
+        expect(response.bodyUsed).to.equal(false);
+        expect(await response.text()).to.equal("streamed text");
+        expect(response.bodyUsed).to.equal(true);
+
+        let rejected = false;
+        try {
+            await response.arrayBuffer();
+        } catch (error) {
+            rejected = error instanceof TypeError;
+        }
+        expect(rejected).to.equal(true);
+    });
+
+    // Ported from WPT fetch/api/response/response-consume-empty.any.js.
+    it("consumes a null body as empty without disturbing it", async function () {
+        const textResponse = new Response();
+        expect(await textResponse.text()).to.equal("");
+        expect(textResponse.bodyUsed).to.equal(false);
+
+        const bufferResponse = new Response();
+        expect((await bufferResponse.arrayBuffer()).byteLength).to.equal(0);
+        expect(bufferResponse.bodyUsed).to.equal(false);
+
+        const bytesResponse = new Response();
+        expect((await bytesResponse.bytes()).byteLength).to.equal(0);
+        expect(bytesResponse.bodyUsed).to.equal(false);
+
+        const blobResponse = new Response();
+        expect((await blobResponse.blob()).size).to.equal(0);
+        expect(blobResponse.bodyUsed).to.equal(false);
+
+        const jsonResponse = new Response();
+        let jsonRejected = false;
+        try {
+            await jsonResponse.json();
+        } catch {
+            jsonRejected = true;
+        }
+        expect(jsonRejected).to.equal(true);
+        expect(jsonResponse.bodyUsed).to.equal(false);
+    });
+
+    // Byte streams reject zero-length enqueues. An empty BufferSource still
+    // represents a non-null body, but its stream must close without a chunk.
+    it("consumes an empty BufferSource without enqueueing an empty byte chunk", async function () {
+        const response = new Response(new Uint8Array(0));
+        expect(response.body).to.be.instanceOf(ReadableStream);
+        expect(response.bodyUsed).to.equal(false);
+        expect(new Uint8Array(await response.arrayBuffer())).to.eql(new Uint8Array(0));
+        expect(response.bodyUsed).to.equal(true);
+    });
+
+    it("snapshots mutable BufferSource input once", async function () {
+        const input = new Uint8Array([80, 65, 83, 83]);
+        const response = new Response(input);
+        input.fill(0);
+        expect(await response.text()).to.equal("PASS");
+    });
+
+    // Adapted from WebKit LayoutTests/fetch/body-init.html.
+    it("stringifies integer and object bodies", async function () {
+        expect(await new Response(1 as any).text()).to.equal("1");
+        expect(await new Response({} as any).text()).to.equal("[object Object]");
+    });
+
+    it("sets inferred content types without replacing explicit headers", async function () {
+        const text = new Response("text");
+        expect(text.headers.get("content-type")).to.equal("text/plain;charset=UTF-8");
+
+        const blob = new Response(new Blob(["blob"], { type: "application/example" }));
+        expect(blob.headers.get("content-type")).to.equal("application/example");
+
+        const explicit = new Response("text", { headers: { "content-type": "text/custom" } });
+        expect(explicit.headers.get("content-type")).to.equal("text/custom");
+    });
+
+    it("clones stream branches for independent consumption", async function () {
+        const response = new Response("clone body", {
+            headers: { "x-test": "value" },
+            status: 201,
+            statusText: "Created"
+        });
+        const clone = response.clone();
+        expect(clone.status).to.equal(201);
+        expect(clone.headers.get("x-test")).to.equal("value");
+        expect(await response.text()).to.equal("clone body");
+        expect(await clone.text()).to.equal("clone body");
+    });
+
+    function withoutPrivateDisturbedState(stream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+        Object.defineProperty(stream, "_disturbed", {
+            configurable: true,
+            get() { return undefined; },
+            set() {}
+        });
+        return stream;
+    }
+
+    it("tracks direct stream reads and rejects invalid body chunks", async function () {
+        const directStream = withoutPrivateDisturbedState(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode("body"));
+                controller.close();
+            }
+        }));
+        const direct = new Response(directStream);
+        const reader = direct.body!.getReader();
+        expect(direct.bodyUsed).to.equal(false);
+        await reader.read();
+        expect(direct.bodyUsed).to.equal(true);
+
+        const invalid = new Response(new ReadableStream({
+            start(controller) {
+                controller.enqueue("not bytes");
+                controller.close();
+            }
+        }) as any);
+        let rejected = false;
+        try {
+            await invalid.bytes();
+        } catch (error) {
+            rejected = error instanceof TypeError;
+        }
+        expect(rejected).to.equal(true);
+    });
+
+    it("rejects a host-shaped stream disturbed before Response construction", async function () {
+        const stream = withoutPrivateDisturbedState(new ReadableStream({
+            start(controller) {
+                controller.enqueue(new Uint8Array([1]));
+                controller.close();
+            }
+        }));
+        const reader = stream.getReader();
+        await reader.read();
+        reader.releaseLock();
+
+        expect(() => new Response(stream)).to.throw(TypeError);
+    });
+
+    // Focused ports from WPT response-stream-disturbed-6.any.js and
+    // response-stream-disturbed-by-pipe.any.js. These must not depend on a
+    // private field supplied by one particular Streams implementation.
+    it("tracks cancellation and piping through standard stream methods", async function () {
+        const cancelled = new Response(withoutPrivateDisturbedState(new ReadableStream()));
+        const cancelledReader = cancelled.body!.getReader();
+        expect(cancelled.bodyUsed).to.equal(false);
+        await cancelledReader.cancel();
+        expect(cancelled.bodyUsed).to.equal(true);
+
+        const piped = new Response(withoutPrivateDisturbedState(new ReadableStream({
+            start(controller) {
+                controller.close();
+            }
+        })));
+        const pipePromise = piped.body!.pipeTo(new WritableStream({}, { highWaterMark: 0 }));
+        expect(piped.bodyUsed).to.equal(true);
+        await pipePromise;
+
+        const pipedThrough = new Response(withoutPrivateDisturbedState(new ReadableStream({
+            start(controller) {
+                controller.close();
+            }
+        })));
+        const output = pipedThrough.body!.pipeThrough(new TransformStream());
+        expect(pipedThrough.bodyUsed).to.equal(true);
+        await output.cancel();
+    });
+
+    // Adapted from Firefox dom/fetch/tests/crashtests/1939295.html. The
+    // unresolved read must remain safe through runtime teardown.
+    it("does not crash while consuming an open empty stream", function () {
+        const pending = new Response(new ReadableStream()).text();
+        expect(pending).to.be.instanceOf(Promise);
+    });
+
+    // Adapted from WebKit's imported many-empty-chunks-crash.html.
+    it("consumes many empty chunks without retaining growing byte buffers", async function () {
+        const response = new Response(new ReadableStream({
+            start(controller) {
+                for (let index = 0; index < 40000; ++index) {
+                    controller.enqueue(new Uint8Array());
+                }
+                controller.close();
+            }
+        }));
+        expect((await response.arrayBuffer()).byteLength).to.equal(0);
+    });
+
+    // Bounded adaptation of Chromium's call-extra-crash-is-disturbed.html.
+    // QuickJS terminates before a JS-defined getter can run after a real
+    // native stack overflow, so retain the deep-call regression portably.
+    it("reads bodyUsed from a deep call stack without recursion", function () {
+        const response = new Response(new ReadableStream());
+        function readAtDepth(depth: number): boolean {
+            return depth === 0 ? response.bodyUsed : readAtDepth(depth - 1);
+        }
+        expect(readAtDepth(128)).to.equal(false);
+    });
+
+    it("provides error, redirect, and JSON factories", async function () {
+        const error = Response.error();
+        expect(error.type).to.equal("error");
+        expect(error.status).to.equal(0);
+
+        const redirect = Response.redirect("https://example.com/path", 307);
+        expect(redirect.status).to.equal(307);
+        expect(redirect.headers.get("location")).to.equal("https://example.com/path");
+
+        const json = Response.json({ value: 42 });
+        expect(json.headers.get("content-type")).to.equal("application/json");
+        expect(await json.json()).to.deep.equal({ value: 42 });
+    });
+
+    it("filters forbidden response Set-Cookie fields", function () {
+        const response = new Response(null, {
+            headers: {
+                "set-cookie": "secret=value",
+                "set-cookie2": "legacy=value"
+            }
+        });
+        response.headers.append("Set-Cookie", "other=value");
+        expect(response.headers.getSetCookie()).to.deep.equal([]);
+        expect(response.headers.has("set-cookie2")).to.equal(false);
+    });
+});
+
 describe("fetch", function () {
     this.timeout(30000);
 
     it("should resolve with ok=true and status=200 for a resource that exists", async function () {
         const response = await fetch("https://github.com/");
+        expect(response).to.be.instanceOf(Response);
+        expect(response.headers).to.be.instanceOf(Headers);
+        expect(response.body).to.be.instanceOf(ReadableStream);
         expect(response.ok).to.equal(true);
         expect(response.status).to.equal(200);
     });
@@ -319,6 +635,71 @@ describe("fetch", function () {
         const response = await fetch("app:///Scripts/symlink_target.js");
         expect(await response.text()).to.equal("var symlink_target_js = true;");
     });
+
+    it("should resolve percent-encoded data URLs locally", async function () {
+        const url = "data:text/plain;charset=utf-8,hello%20native%20fetch%21";
+        const response = await fetch(url);
+        expect(response.ok).to.equal(true);
+        expect(response.status).to.equal(200);
+        expect(response.url).to.equal(url);
+        expect(response.headers.get("content-type")).to.equal("text/plain;charset=utf-8");
+        expect(await response.text()).to.equal("hello native fetch!");
+    });
+
+    it("should decode base64 data URLs without using the network transport", async function () {
+        const response = await fetch("data:application/octet-stream;base64,AAEC/w==");
+        const clone = response.clone();
+        expect(new Uint8Array(await response.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+        const blob = await clone.blob();
+        expect(blob.type).to.equal("application/octet-stream");
+        expect(new Uint8Array(await blob.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+    });
+
+    // Adapted from WPT fetch/data-urls/processing.any.js and resources/data-urls.json.
+    const dataUrlCases: Array<[string, string, number[]]> = [
+        ["data:,", "text/plain;charset=US-ASCII", []],
+        ["data:,%FF", "text/plain;charset=US-ASCII", [255]],
+        ["data:text/plain,X", "text/plain", [88]],
+        ["data:,X#fragment", "text/plain;charset=US-ASCII", [88]],
+        ["data:;BASe64,WA", "text/plain;charset=US-ASCII", [88]],
+        ["data:  ;charset=x   ;  base64,W%20A", "text/plain;charset=x", [88]]
+    ];
+
+    for (const [url, expectedType, expectedBody] of dataUrlCases) {
+        it(`should process WPT data URL case ${JSON.stringify(url)}`, async function () {
+            const response = await fetch(url);
+            expect(response.headers.get("content-type")).to.equal(expectedType);
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).to.eql(expectedBody);
+        });
+    }
+
+    // Adapted from WPT's forgiving-base64 vectors and Chromium's DataURL tests.
+    const base64Cases: Array<[string, number[]]> = [
+        ["abcd", [105, 183, 29]],
+        ["ab%09%0A%0C%0D%20cd", [105, 183, 29]],
+        ["ab==", [105]],
+        ["/A", [252]],
+        ["YR", [97]]
+    ];
+
+    for (const [encoded, expectedBody] of base64Cases) {
+        it(`should forgiving-base64 decode ${JSON.stringify(encoded)}`, async function () {
+            const response = await fetch(`data:application/octet-stream;base64,${encoded}`);
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).to.eql(expectedBody);
+        });
+    }
+
+    for (const encoded of ["a", "ab===", "ab%0Bcd", "=a", "a=b"]) {
+        it(`should reject invalid WPT base64 case ${JSON.stringify(encoded)}`, async function () {
+            let error: unknown;
+            try {
+                await fetch(`data:application/octet-stream;base64,${encoded}`);
+            } catch (caught) {
+                error = caught;
+            }
+            expect(error).to.be.instanceOf(TypeError);
+        });
+    }
 
     it("arrayBuffer() should return the body as bytes", async function () {
         const response = await fetch("app:///Scripts/symlink_target.js");
@@ -450,6 +831,21 @@ describe("fetch", function () {
         }
         expect(error, "fetch should have rejected").to.not.equal(undefined);
         expect(error.name).to.equal("AbortError");
+    });
+
+    it("should preserve a primitive abort reason when aborted in-flight", async function () {
+        this.timeout(30000);
+        const controller = new AbortController();
+        const promise = fetch("https://github.com/", { signal: controller.signal } as any);
+        controller.abort("visualization-stop");
+
+        let error: any;
+        try {
+            await promise;
+        } catch (e) {
+            error = e;
+        }
+        expect(error).to.equal("visualization-stop");
     });
 });
 
@@ -1371,8 +1767,452 @@ describe("Console", function () {
     });
 });
 
+describe("Web Streams", function () {
+    // Focused ports from the WHATWG Streams WPT suites at c05b4473:
+    // readable-streams/general.any.js and tee.any.js,
+    // writable-streams/write.any.js, and transform-streams/general.any.js.
+    it("installs the standard stream constructors", function () {
+        expect(ReadableStream).to.be.a("function");
+        expect(WritableStream).to.be.a("function");
+        expect(TransformStream).to.be.a("function");
+        expect(ByteLengthQueuingStrategy).to.be.a("function");
+        expect(CountQueuingStrategy).to.be.a("function");
+    });
+
+    it("delivers queued chunks in order and closes the reader", async function () {
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("a");
+                controller.enqueue("b");
+                controller.close();
+            }
+        });
+        const reader = stream.getReader();
+
+        expect(await reader.read()).to.deep.equal({ value: "a", done: false });
+        expect(await reader.read()).to.deep.equal({ value: "b", done: false });
+        expect(await reader.read()).to.deep.equal({ value: undefined, done: true });
+        await reader.closed;
+    });
+
+    it("propagates a rejected pull to read and closed", async function () {
+        const failure = new Error("pull failed");
+        const reader = new ReadableStream({
+            pull() {
+                return Promise.reject(failure);
+            }
+        }).getReader();
+
+        let readFailure: unknown;
+        let closedFailure: unknown;
+        try { await reader.read(); } catch (error) { readFailure = error; }
+        try { await reader.closed; } catch (error) { closedFailure = error; }
+        expect(readFailure).to.equal(failure);
+        expect(closedFailure).to.equal(failure);
+    });
+
+    it("tees without one branch consuming the other", async function () {
+        const [first, second] = new ReadableStream({
+            start(controller) {
+                controller.enqueue("a");
+                controller.enqueue("b");
+                controller.close();
+            }
+        }).tee();
+        const firstReader = first.getReader();
+        const secondReader = second.getReader();
+
+        expect(await firstReader.read()).to.deep.equal({ value: "a", done: false });
+        expect(await firstReader.read()).to.deep.equal({ value: "b", done: false });
+        expect(await firstReader.read()).to.deep.equal({ value: undefined, done: true });
+        expect(await secondReader.read()).to.deep.equal({ value: "a", done: false });
+    });
+
+    it("waits for asynchronous writes before closing", async function () {
+        const stored: number[] = [];
+        const writable = new WritableStream({
+            write(chunk) {
+                return Promise.resolve().then(() => stored.push(chunk));
+            }
+        });
+        const writer = writable.getWriter();
+
+        writer.write(1);
+        writer.write(2);
+        await writer.close();
+        expect(stored).to.deep.equal([1, 2]);
+    });
+
+    it("applies transform output and backpressure", async function () {
+        const transform = new TransformStream({
+            transform(chunk, controller) {
+                controller.enqueue(chunk.toUpperCase());
+            }
+        });
+        const writer = transform.writable.getWriter();
+        const reader = transform.readable.getReader();
+        const write = writer.write("native");
+
+        expect(await reader.read()).to.deep.equal({ value: "NATIVE", done: false });
+        await write;
+        await writer.close();
+        expect(await reader.read()).to.deep.equal({ value: undefined, done: true });
+    });
+
+    it("supports BYOB reads from byte streams", async function () {
+        let sent = false;
+        const stream = new ReadableStream({
+            type: "bytes",
+            pull(controller) {
+                if (!sent) {
+                    sent = true;
+                    controller.enqueue(new Uint8Array([8, 241, 48, 123, 151]));
+                    controller.close();
+                }
+            }
+        } as any);
+        const reader = stream.getReader({ mode: "byob" });
+        const result = await reader.read(new Uint8Array(8));
+
+        expect(result.done).to.equal(false);
+        expect(Array.from(result.value!)).to.deep.equal([8, 241, 48, 123, 151]);
+        expect((await reader.read(new Uint8Array(8))).done).to.equal(true);
+    });
+
+    // Ported from Firefox's dom/streams/test/xpcshell/subclassing.js.
+    it("supports subclassed streams, readers, and queuing strategies", async function () {
+        class SubclassedStream extends ReadableStream {}
+        class SubclassedStrategy extends CountQueuingStrategy {}
+        const stream = new SubclassedStream({
+            start(controller) {
+                controller.enqueue("first");
+                controller.close();
+            }
+        });
+        const Reader = stream.getReader().constructor as typeof ReadableStreamDefaultReader;
+        class SubclassedReader extends Reader {}
+
+        expect(stream).to.be.instanceOf(ReadableStream);
+        expect(new SubclassedStrategy({ highWaterMark: 4 }).highWaterMark).to.equal(4);
+
+        const secondStream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("second");
+                controller.close();
+            }
+        });
+        const reader = new SubclassedReader(secondStream);
+        expect(await reader.read()).to.deep.equal({ value: "second", done: false });
+    });
+
+    // Ported from Chromium's http/tests/streams/chromium/transform-stream-enqueue.html.
+    it("rejects enqueues after a transform is terminated or errored", function () {
+        expect(() => new TransformStream({
+            start(controller) {
+                controller.terminate();
+                controller.enqueue("late");
+            }
+        })).to.throw(TypeError);
+
+        expect(() => new TransformStream({
+            start(controller) {
+                controller.error(new Error("failed"));
+                controller.enqueue("late");
+            }
+        })).to.throw(TypeError);
+    });
+});
+
+describe("Compression streams", function () {
+    this.timeout(20000);
+
+    type SupportedCompressionFormat = "deflate" | "deflate-raw" | "gzip";
+    type CompressionTransform = {
+        readable: ReadableStream<Uint8Array>;
+        writable: WritableStream<BufferSource>;
+    };
+
+    const formats: SupportedCompressionFormat[] = ["deflate", "deflate-raw", "gzip"];
+    const expectedOutput = new TextEncoder().encode("expected output");
+    const compressedFixtures: Array<[SupportedCompressionFormat, Uint8Array]> = [
+        ["deflate", new Uint8Array([120, 156, 75, 173, 40, 72, 77, 46, 73, 77, 81, 200, 47, 45, 41, 40, 45, 1, 0, 48, 173, 6, 36])],
+        ["gzip", new Uint8Array([31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 173, 40, 72, 77, 46, 73, 77, 81, 200, 47, 45, 41, 40, 45, 1, 0, 176, 1, 57, 179, 15, 0, 0, 0])],
+        ["deflate-raw", new Uint8Array([75, 173, 40, 72, 77, 46, 73, 77, 81, 200, 47, 45, 41, 40, 45, 1, 0])],
+    ];
+
+    async function concatenateStream(readable: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+        const reader = readable.getReader();
+        const chunks: Uint8Array[] = [];
+        let byteLength = 0;
+        while (true) {
+            const result = await reader.read();
+            if (result.done) {
+                break;
+            }
+            expect(result.value).to.be.instanceOf(Uint8Array);
+            chunks.push(result.value);
+            byteLength += result.value.byteLength;
+        }
+
+        const output = new Uint8Array(byteLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+            output.set(chunk, offset);
+            offset += chunk.byteLength;
+        }
+        return output;
+    }
+
+    async function transformChunks(transform: CompressionTransform, chunks: BufferSource[]): Promise<Uint8Array> {
+        const output = concatenateStream(transform.readable);
+        const writer = transform.writable.getWriter();
+        for (const chunk of chunks) {
+            await writer.write(chunk);
+        }
+        await writer.close();
+        return output;
+    }
+
+    async function roundTrip(input: Uint8Array, format: SupportedCompressionFormat): Promise<Uint8Array> {
+        const compressed = await transformChunks(new CompressionStream(format), [input]);
+        return transformChunks(new DecompressionStream(format), [compressed]);
+    }
+
+    it("exposes browser-shaped constructors, properties, and brand checks", function () {
+        const compression = new CompressionStream("gzip");
+        const decompression = new DecompressionStream("gzip");
+        expect(compression.readable).to.be.instanceOf(ReadableStream);
+        expect(compression.writable).to.be.instanceOf(WritableStream);
+        expect(decompression.readable).to.be.instanceOf(ReadableStream);
+        expect(decompression.writable).to.be.instanceOf(WritableStream);
+        expect(String(compression)).to.equal("[object CompressionStream]");
+        expect(String(decompression)).to.equal("[object DecompressionStream]");
+
+        const compressionReadable = Object.getOwnPropertyDescriptor(CompressionStream.prototype, "readable")!.get!;
+        const decompressionWritable = Object.getOwnPropertyDescriptor(DecompressionStream.prototype, "writable")!.get!;
+        expect(() => compressionReadable.call({})).to.throw(TypeError);
+        expect(() => decompressionWritable.call({})).to.throw(TypeError);
+    });
+
+    // Focused ports from WPT compression/*-constructor-error.any.js.
+    it("validates and converts constructor formats", function () {
+        expect(() => new CompressionStream()).to.throw(TypeError);
+        expect(() => new DecompressionStream()).to.throw(TypeError);
+        expect(() => new CompressionStream("invalid" as any)).to.throw(TypeError);
+        expect(() => new DecompressionStream("GZIP" as any)).to.throw(TypeError);
+        expect(() => new CompressionStream(Symbol("gzip") as any)).to.throw(TypeError);
+
+        const failure = new Error("format conversion failed");
+        let thrown: unknown;
+        try {
+            new DecompressionStream({ toString() { throw failure; } } as any);
+        } catch (error) {
+            thrown = error;
+        }
+        expect(thrown).to.equal(failure);
+    });
+
+    // Focused ports from WPT compression-stream.any.js,
+    // compression-multiple-chunks.any.js, and including-empty-chunk.any.js.
+    it("round-trips all supported formats across multiple and empty chunks", async function () {
+        const middleBacking = new Uint8Array(new TextEncoder().encode("!from browser-shaped streams!"));
+        const inputChunks = [
+            new TextEncoder().encode("Hello "),
+            new Uint8Array(),
+            middleBacking.subarray(1, middleBacking.byteLength - 1),
+        ];
+        const expected = new TextEncoder().encode("Hello from browser-shaped streams");
+
+        for (const format of formats) {
+            const compressed = await transformChunks(new CompressionStream(format), inputChunks);
+            const output = await transformChunks(new DecompressionStream(format), [compressed]);
+            expect(Array.from(output)).to.deep.equal(Array.from(expected));
+        }
+    });
+
+    // Ported from WPT decompression-buffersource.any.js.
+    it("accepts ArrayBuffer, typed-array, and DataView input", async function () {
+        const fixtures: Array<[SupportedCompressionFormat, number[], string]> = [
+            ["deflate", [120, 156, 75, 52, 48, 52, 50, 54, 49, 53, 3, 0, 8, 136, 1, 199], "a0123456"],
+            ["gzip", [31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 52, 48, 52, 2, 0, 216, 252, 63, 136, 4, 0, 0, 0], "a012"],
+            ["deflate-raw", [0, 6, 0, 249, 255, 65, 66, 67, 68, 69, 70, 1, 0, 0, 255, 255], "ABCDEF"],
+        ];
+
+        for (const [format, values, expected] of fixtures) {
+            const expectedBytes = Array.from(new TextEncoder().encode(expected));
+            const makeBuffer = () => new Uint8Array(values).buffer as ArrayBuffer;
+            const padded = new Uint8Array(values.length + 2);
+            padded.set(values, 1);
+            const inputs: BufferSource[] = [
+                makeBuffer(),
+                new Int8Array(makeBuffer()),
+                new Uint16Array(makeBuffer()),
+                new DataView(makeBuffer()),
+                new DataView(padded.buffer, 1, values.length),
+            ];
+            for (const input of inputs) {
+                const output = await transformChunks(new DecompressionStream(format), [input]);
+                expect(Array.from(output)).to.deep.equal(expectedBytes);
+            }
+        }
+    });
+
+    // Focused ports from WPT decompression-split-chunk.any.js and
+    // decompression-uint8array-output.any.js.
+    it("decompresses input split at every small chunk boundary", async function () {
+        for (const [format, fixture] of compressedFixtures) {
+            for (let chunkSize = 1; chunkSize < 16; ++chunkSize) {
+                const chunks: Uint8Array[] = [];
+                for (let offset = 0; offset < fixture.byteLength; offset += chunkSize) {
+                    chunks.push(fixture.slice(offset, offset + chunkSize));
+                }
+                const output = await transformChunks(new DecompressionStream(format), chunks);
+                expect(Array.from(output)).to.deep.equal(Array.from(expectedOutput));
+            }
+        }
+    });
+
+    // Ported from WPT compression-large-flush-output.any.js.
+    it("does not truncate output produced while closing", async function () {
+        const encoded = new TextEncoder().encode(JSON.stringify(Array.from({ length: 10000 }, (_, index) => index)));
+        const input = encoded.subarray(0, 35579);
+        for (const format of formats) {
+            expect(Array.from(await roundTrip(input, format))).to.deep.equal(Array.from(input));
+        }
+    });
+
+    // WPT decompression-extra-input.any.js requires already-produced output
+    // to be observable before the stream reports the trailing-data error.
+    it("emits valid output before rejecting extra compressed input", async function () {
+        for (const [format, fixture] of compressedFixtures) {
+            const stream = new DecompressionStream(format);
+            const reader = stream.readable.getReader();
+            const writer = stream.writable.getWriter();
+            const firstRead = reader.read();
+            const write = writer.write(new Uint8Array([...fixture, 0])).catch(error => error);
+            const first = await firstRead;
+            expect(first.done).to.equal(false);
+            expect(Array.from(first.value!)).to.deep.equal(Array.from(expectedOutput));
+
+            let readFailure: unknown;
+            try { await reader.read(); } catch (error) { readFailure = error; }
+            expect(readFailure).to.be.instanceOf(TypeError);
+            expect(await write).to.be.instanceOf(TypeError);
+        }
+    });
+
+    // Focused ports from WPT compression-bad-chunks.any.js and
+    // decompression-bad-chunks.any.js.
+    it("errors both sides of the transform for non-BufferSource chunks", async function () {
+        for (const create of [
+            () => new CompressionStream("gzip"),
+            () => new DecompressionStream("gzip"),
+        ]) {
+            const stream = create();
+            const reader = stream.readable.getReader();
+            const writer = stream.writable.getWriter();
+            const read = reader.read().catch(error => error);
+            const write = writer.write({} as any).catch(error => error);
+            expect(await write).to.be.instanceOf(TypeError);
+            expect(await read).to.be.instanceOf(TypeError);
+        }
+    });
+
+    // Focused ports from WPT decompression-corrupt-input.any.js and the
+    // truncated-input check in Chromium's InflateTransformer.
+    it("rejects corrupt and truncated compressed input", async function () {
+        for (const [format, fixture] of compressedFixtures) {
+            const inputs = [
+                fixture.subarray(0, fixture.byteLength - 1),
+                new Uint8Array(fixture.map((value, index) => index === 0 ? value ^ 0xff : value)),
+            ];
+            for (const input of inputs) {
+                const stream = new DecompressionStream(format);
+                const output = concatenateStream(stream.readable).catch(error => error);
+                const writer = stream.writable.getWriter();
+                await writer.write(input).catch(() => undefined);
+                const close = writer.close().catch(error => error);
+                expect(await close).to.be.instanceOf(TypeError);
+                expect(await output).to.be.instanceOf(TypeError);
+            }
+        }
+    });
+
+    // Chromium buffers output before enqueue because enqueue may execute
+    // JavaScript that mutates or detaches the input still being consumed.
+    // This regression test forces that reentrancy without needing postMessage.
+    it("finishes consuming input before an enqueue callback can mutate it", async function () {
+        const input = new Uint8Array(256 * 1024);
+        let state = 0x12345678;
+        for (let index = 0; index < input.length; ++index) {
+            state ^= state << 13;
+            state ^= state >>> 17;
+            state ^= state << 5;
+            input[index] = state & 0xff;
+        }
+        const expected = input.slice();
+
+        const prototype = TransformStreamDefaultController.prototype as any;
+        const originalEnqueue = prototype.enqueue;
+        let mutated = false;
+        prototype.enqueue = function(chunk: unknown) {
+            if (!mutated) {
+                mutated = true;
+                input.fill(0);
+            }
+            return originalEnqueue.call(this, chunk);
+        };
+
+        let compressed: Uint8Array;
+        try {
+            compressed = await transformChunks(new CompressionStream("deflate"), [input]);
+        } finally {
+            prototype.enqueue = originalEnqueue;
+        }
+
+        expect(mutated).to.equal(true);
+        const output = await transformChunks(new DecompressionStream("deflate"), [compressed!]);
+        expect(Array.from(output)).to.deep.equal(Array.from(expected));
+    });
+
+    // Empty chunks are common in WebKit and WPT stream regressions. They must
+    // not allocate codec output or accumulate retained per-write state.
+    it("handles a long sequence of empty writes without retained output", async function () {
+        const chunks = Array.from({ length: 1024 }, () => new Uint8Array());
+        const compressed = await transformChunks(new CompressionStream("gzip"), chunks);
+        const output = await transformChunks(new DecompressionStream("gzip"), [compressed]);
+        expect(output.byteLength).to.equal(0);
+    });
+
+    // Repeated short-lived streams model asset-heavy native applications. A
+    // completed stream must release zlib and scratch storage before JS GC.
+    it("releases completed codec state across repeated streams", async function () {
+        const fixture = compressedFixtures.find(([format]) => format === "gzip")![1];
+        for (let iteration = 0; iteration < 128; ++iteration) {
+            const output = await transformChunks(new DecompressionStream("gzip"), [fixture]);
+            expect(Array.from(output)).to.deep.equal(Array.from(expectedOutput));
+        }
+    });
+});
+
 describe("Blob", function () {
+    this.timeout(10000);
+
     let emptyBlobs: Blob[], helloBlobs: Blob[], stringBlob: Blob, typedArrayBlob: Blob, arrayBufferBlob: Blob, blobBlob: Blob;
+
+    async function readStream(stream: ReadableStream<Uint8Array>, mode?: "byob"): Promise<number[]> {
+        const reader: any = stream.getReader(mode === undefined ? undefined : { mode });
+        const bytes: number[] = [];
+        while (true) {
+            const result = mode === "byob"
+                ? await reader.read(new Uint8Array(64))
+                : await reader.read();
+            if (result.done) {
+                return bytes;
+            }
+            bytes.push(...Array.from(result.value as Uint8Array));
+        }
+    }
 
     before(function () {
         emptyBlobs = [new Blob([]), new Blob([])];
@@ -1416,6 +2256,120 @@ describe("Blob", function () {
         expect(modelGltfJson.type).to.equal("model/gltf+json");
     });
 
+    // Focused ports from WPT FileAPI/blob/Blob-constructor.any.js.
+    it("accepts iterable parts and preserves their order", async function () {
+        const parts = {
+            *[Symbol.iterator]() {
+                yield "foo";
+                yield new Uint8Array([98, 97, 114]);
+                yield new Blob(["baz"]);
+            }
+        };
+        const blob = new Blob(parts as any);
+        expect(blob.size).to.equal(9);
+        expect(await blob.text()).to.equal("foobarbaz");
+    });
+
+    it("uses an Array's overridden iterator", async function () {
+        const parts = ["ignored"];
+        parts[Symbol.iterator] = function* () {
+            yield "custom";
+        };
+
+        expect(await new Blob(parts).text()).to.equal("custom");
+    });
+
+    it("closes an iterator when BlobPart conversion throws", function () {
+        let closed = false;
+        const badPart = {
+            toString() {
+                throw new Error("part conversion failed");
+            }
+        };
+        const parts = (function* () {
+            try {
+                yield badPart;
+            } finally {
+                closed = true;
+            }
+        })();
+
+        // QuickJS currently wraps an exception rethrown through a native
+        // constructor as its generic JS error type, so assert the observable
+        // iterator-close behavior separately from the adapter's error text.
+        expect(() => new Blob(parts as any)).to.throw();
+        expect(closed).to.equal(true);
+    });
+
+    it("observes BlobPart array mutations during iteration", async function () {
+        const parts: any[] = [
+            {
+                toString() {
+                    parts.pop();
+                    return "PASS";
+                }
+            },
+            {
+                toString() {
+                    throw new Error("removed part was converted");
+                }
+            }
+        ];
+
+        expect(await new Blob(parts).text()).to.equal("PASS");
+    });
+
+    it("converts parts before reading options in WebIDL order", function () {
+        const accesses: string[] = [];
+        const part = {
+            toString() {
+                accesses.push("part");
+                return "data";
+            }
+        };
+        new Blob([part], {
+            get type() {
+                accesses.push("type");
+                return "TEXT/PLAIN";
+            },
+            get endings() {
+                accesses.push("endings");
+                return "transparent" as EndingType;
+            }
+        });
+
+        expect(accesses).to.deep.equal(["part", "endings", "type"]);
+    });
+
+    it("validates the endings enum and options dictionary", function () {
+        expect(() => new Blob([], { endings: "NATIVE" as EndingType })).to.throw();
+        expect(() => new Blob([], { endings: "invalid" as EndingType })).to.throw();
+        for (const value of [123, true, "abc"]) {
+            expect(() => new Blob([], value as any)).to.throw();
+        }
+        expect(() => new Blob([], null as any)).not.to.throw();
+        expect(() => new Blob([], undefined)).not.to.throw();
+    });
+
+    it("exposes browser-compatible class tags", function () {
+        expect(String(new Blob())).to.equal("[object Blob]");
+        expect(String(new File([], "empty.txt"))).to.equal("[object File]");
+    });
+
+    it("rejects primitive parts containers", function () {
+        for (const value of [null, true, 7, "not a sequence"]) {
+            // Some Node-API adapters currently wrap a Napi::TypeError thrown
+            // by a constructor as their generic JS error type.
+            expect(() => new Blob(value as any)).to.throw();
+        }
+    });
+
+    it("normalizes valid MIME types and clears invalid types", function () {
+        expect(new Blob([], { type: "TEXT/PLAIN" }).type).to.equal("text/plain");
+        expect(new Blob([], { type: "te\x09xt/plain" }).type).to.equal("");
+        expect(new Blob([], { type: "text/\x7fplain" }).type).to.equal("");
+    });
+
     // -------------------------------- Blob.text() --------------------------------
     it("returns empty string for empty blobs", async function () {
         for (const blob of emptyBlobs) {
@@ -1435,6 +2389,11 @@ describe("Blob", function () {
         const utf8Blob = new Blob(["你好, 世界"]);
         const text = await utf8Blob.text();
         expect(text).to.equal("你好, 世界");
+    });
+
+    it("replaces invalid UTF-8 bytes", async function () {
+        const invalid = new Uint8Array([192, 193, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255]);
+        expect(await new Blob([invalid]).text()).to.equal("\ufffd".repeat(invalid.length));
     });
 
     it("preserves line endings like default transparent mode", async function () {
@@ -1482,6 +2441,109 @@ describe("Blob", function () {
             expect(view[4]).to.equal(111); // 'o'
 
         }
+    });
+
+    // Focused ports from WPT FileAPI/blob/Blob-slice.any.js.
+    it("slices across part boundaries and applies clamp rounding", async function () {
+        const blob = new Blob(["foo", new Blob(["bar"]), "baz"]);
+        expect(await blob.slice(2, 7).text()).to.equal("obarb");
+        expect(await new Blob(["abcd"]).slice(1.5).text()).to.equal("cd");
+        expect(await new Blob(["abcd"]).slice(2.5).text()).to.equal("cd");
+        expect(await blob.slice(-3, undefined, "TEXT/PLAIN").text()).to.equal("baz");
+        expect(blob.slice(-3, undefined, "TEXT/PLAIN").type).to.equal("text/plain");
+    });
+
+    // Focused ports from WPT FileAPI/blob/Blob-stream.any.js.
+    it("streams binary data through default and BYOB readers", async function () {
+        const input = [8, 241, 48, 123, 151];
+        const blob = new Blob([new Uint8Array(input)]);
+        expect(await readStream(blob.stream())).to.deep.equal(input);
+        expect(await readStream(blob.stream(), "byob")).to.deep.equal(input);
+        expect(await readStream(new Blob().stream())).to.deep.equal([]);
+    });
+
+    // Adapted from WPT streams/readable-byte-streams/general.any.js BYOB
+    // coverage. Small, offset views exercise the caller-owned output path.
+    it("fills bounded BYOB views across Blob segment boundaries", async function () {
+        const input = new Uint8Array(97);
+        for (let index = 0; index < input.length; ++index) {
+            input[index] = (index * 31) & 0xff;
+        }
+
+        const blob = new Blob([input.subarray(0, 11), input.subarray(11, 53), input.subarray(53)]);
+        const reader = blob.stream().getReader({ mode: "byob" });
+        const output: number[] = [];
+        const requestSizes = [1, 3, 7, 16];
+        let requestIndex = 0;
+        while (true) {
+            const requestSize = requestSizes[requestIndex++ % requestSizes.length];
+            const request = new Uint8Array(new ArrayBuffer(requestSize + 4), 2, requestSize);
+            const result = await reader.read(request);
+            if (result.done) {
+                break;
+            }
+            expect(result.value!.byteLength).to.be.at.most(requestSize);
+            output.push(...Array.from(result.value!));
+        }
+
+        expect(output).to.deep.equal(Array.from(input));
+    });
+
+    it("keeps independent stream cursors after the Blob reference is dropped", async function () {
+        let blob: Blob | null = new Blob(["PASS"]);
+        const first = blob.stream();
+        const second = blob.stream();
+        blob = null;
+        expect(await readStream(first)).to.deep.equal([80, 65, 83, 83]);
+        expect(await readStream(second)).to.deep.equal([80, 65, 83, 83]);
+    });
+
+    // Adapted from WebKit's fast/files/blob-stream-chunks.html.
+    it("chunks a large Blob and supports cancellation without retaining work", async function () {
+        const blob = new Blob([new Uint8Array(5 * 1024 * 1024)]);
+        const reader = blob.stream().getReader();
+        const first = await reader.read();
+        expect(first.done).to.equal(false);
+        expect(first.value!.byteLength).to.be.at.most(64 * 1024);
+        await reader.cancel();
+        await reader.closed;
+    });
+
+    // Adapted from WebKit's blob-stream crash regression and exercises
+    // teardown of the C++ pull-state closures under repeated construction.
+    it("constructs and cancels many empty streams without crashing", async function () {
+        for (let index = 0; index < 1000; ++index) {
+            await new Blob().stream().cancel();
+        }
+    });
+
+    // Scaled port of Firefox's dom/streams/test/xpcshell/large-pipeto.js.
+    it("pipes nested shared Blob parts without corrupting chunk boundaries", async function () {
+        const pattern = new Uint8Array(256 * 1024);
+        for (let index = 0; index < pattern.length; ++index) {
+            pattern[index] = index % 256;
+        }
+        const pair = new Blob([pattern, pattern]);
+        const nested = new Blob([pair, pair, pair, pair, pair, pair]);
+        let position = 0;
+
+        await nested.stream().pipeTo(new WritableStream({
+            write(chunk: Uint8Array) {
+                for (const value of chunk) {
+                    const expected = position % pattern.length % 256;
+                    if (value !== expected) {
+                        throw new Error(`Blob stream byte ${position}: expected ${expected}, received ${value}`);
+                    }
+                    ++position;
+                }
+            }
+        }));
+        expect(position).to.equal(pattern.length * 12);
+    });
+
+    it("uses a File's Blob bytes when composing parts", async function () {
+        const file = new File(["a", "b"], "letters.txt");
+        expect(await new Blob(["<", file, ">"]).text()).to.equal("<ab>");
     });
 });
 
@@ -1804,6 +2866,22 @@ describe("File", function () {
         expect(text).to.equal("你好, 世界");
     });
 
+    // Adapted from WebKit's fast/files/blob-stream-crash-2.html.
+    it("streams and slices multiple File parts through the Blob API", async function () {
+        const file = new File(["a", new Blob(), "b", new Blob(), "c", new Blob(), "d"], "letters.txt");
+        const reader = file.stream().getReader();
+        const bytes: number[] = [];
+        while (true) {
+            const result = await reader.read();
+            if (result.done) {
+                break;
+            }
+            bytes.push(...Array.from(result.value as Uint8Array));
+        }
+        expect(bytes).to.deep.equal([97, 98, 99, 100]);
+        expect(await file.slice(1, 3).text()).to.equal("bc");
+    });
+
     // -------------------------------- Blob inheritance --------------------------------
     it("is an instance of Blob (prototype chain wired up)", function () {
         // BJS core (fileTools, Offline/database, abstractEngine,
@@ -2030,6 +3108,285 @@ describe("FileReader", function () {
                 done(e);
             }
         });
+    });
+});
+
+describe("IndexedDB", function () {
+    this.timeout(10000);
+
+    let databaseCounter = 0;
+    const databaseName = (test: string) =>
+        `jsruntimehost-${test}-${++databaseCounter}`;
+
+    const requestResult = <T>(request: IDBRequest<T>): Promise<T> =>
+        new Promise((resolve, reject) => {
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+
+    const transactionDone = (transaction: IDBTransaction): Promise<void> =>
+        new Promise((resolve, reject) => {
+            transaction.oncomplete = () => resolve();
+            transaction.onabort = () =>
+                reject(transaction.error || new Error("IndexedDB transaction aborted"));
+            transaction.onerror = () => {
+                // The cancelable request error determines whether the
+                // transaction aborts; onabort carries the final result.
+            };
+        });
+
+    const openDatabase = (
+        name: string,
+        version: number,
+        upgrade: (database: IDBDatabase, transaction: IDBTransaction) => void
+    ): Promise<IDBDatabase> =>
+        new Promise((resolve, reject) => {
+            const request = indexedDB.open(name, version);
+            request.onupgradeneeded = () =>
+                upgrade(request.result, request.transaction!);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+
+    it("supports key paths, generated keys, indexes, and storage clones", async function () {
+        // Adapted from WPT IndexedDB/keygenerator.any.js,
+        // clone-before-keypath-eval.any.js, and structured-clone.any.js.
+        const name = databaseName("records");
+        const database = await openDatabase(name, 1, db => {
+            const store = db.createObjectStore("records", {
+                keyPath: "id",
+                autoIncrement: true,
+            });
+            store.createIndex("by-email", "email", { unique: true });
+        });
+
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        const record: any = {
+            email: "first@example.test",
+            bytes,
+            alias: bytes,
+        };
+        record.self = record;
+
+        const write = database.transaction("records", "readwrite");
+        const writeDone = transactionDone(write);
+        const key = await requestResult(
+            write.objectStore("records").add(record)
+        );
+        expect(key).to.equal(1);
+        expect(record.id).to.equal(undefined);
+        bytes[0] = 99;
+        await writeDone;
+
+        const read = database.transaction("records");
+        const stored: any = await requestResult(
+            read.objectStore("records").index("by-email").get("first@example.test")
+        );
+        expect(stored.id).to.equal(1);
+        expect(stored.self).to.equal(stored);
+        expect(stored.bytes).to.equal(stored.alias);
+        expect(Array.from(stored.bytes)).to.eql([1, 2, 3, 4]);
+
+        stored.bytes[1] = 88;
+        const readAgain = database.transaction("records");
+        const storedAgain: any = await requestResult(
+            readAgain.objectStore("records").get(1)
+        );
+        expect(Array.from(storedAgain.bytes)).to.eql([1, 2, 3, 4]);
+        database.close();
+    });
+
+    it("stores Blob values without stalling an unrelated transaction", async function () {
+        // Regression coverage for Chromium crbug.com/475947902:
+        // https://chromium.googlesource.com/chromium/src/+/4e5f6ab9fcf10d98dadb6861184b686d244635fb
+        // Chromium regressed by coupling an in-progress Blob write to an
+        // unrelated object-store read. Keep disjoint scopes independent and
+        // preserve the Blob while cloning it for storage.
+        const name = databaseName("blob-concurrency");
+        const database = await openDatabase(name, 1, db => {
+            db.createObjectStore("blobs");
+            db.createObjectStore("other");
+        });
+
+        const write = database.transaction("blobs", "readwrite");
+        const writeDone = transactionDone(write);
+        write.objectStore("blobs").put(
+            { blob: new Blob(["abc"], { type: "text/plain" }) },
+            "key"
+        );
+
+        const read = database.transaction("other", "readonly");
+        const readDone = transactionDone(read);
+        expect(await requestResult(read.objectStore("other").get("missing")))
+            .to.equal(undefined);
+        read.commit();
+        await readDone;
+        await writeDone;
+
+        const stored: any = await requestResult(
+            database.transaction("blobs").objectStore("blobs").get("key")
+        );
+        expect(stored.blob).to.be.an.instanceof(Blob);
+        expect(stored.blob.type).to.equal("text/plain");
+        expect(await stored.blob.text()).to.equal("abc");
+        database.close();
+    });
+
+    it("rolls back writes and generated keys when a transaction aborts", async function () {
+        // Adapted from WPT IndexedDB/idbtransaction_abort.any.js and
+        // transaction-abort-generator-revert.any.js. Applying writes directly
+        // to a backing Map is a tempting in-memory implementation shortcut;
+        // it violates IndexedDB atomicity when the transaction aborts.
+        const name = databaseName("rollback");
+        const database = await openDatabase(name, 1, db => {
+            db.createObjectStore("records", { autoIncrement: true });
+        });
+
+        const transaction = database.transaction("records", "readwrite");
+        const aborted = new Promise<void>((resolve, reject) => {
+            transaction.onabort = () => resolve();
+            transaction.oncomplete = () =>
+                reject(new Error("aborted transaction completed"));
+        });
+        transaction.objectStore("records").add("discarded");
+        transaction.abort();
+        await aborted;
+
+        const replacement = database.transaction("records", "readwrite");
+        const replacementDone = transactionDone(replacement);
+        const key = await requestResult(
+            replacement.objectStore("records").add("committed")
+        );
+        await replacementDone;
+        expect(key).to.equal(1);
+        expect(
+            await requestResult(
+                database.transaction("records").objectStore("records").get(1)
+            )
+        ).to.equal("committed");
+        database.close();
+    });
+
+    it("continues a transaction when a request error is canceled", async function () {
+        // Adapted from WPT IndexedDB/idbtransaction.any.js and
+        // idbobjectstore-put-unique-index-constraint-is-atomic.any.js.
+        // Chromium's abort/error ordering regression tests landed in:
+        // https://chromium.googlesource.com/chromium/src/+/7af4cd7effc0e86f7f4a13b740f9315b243bf469
+        // Do not abort the whole transaction before the cancelable request
+        // error can suppress its default action.
+        const name = databaseName("cancel-error");
+        const database = await openDatabase(name, 1, db => {
+            const store = db.createObjectStore("records", { keyPath: "id" });
+            store.createIndex("unique-value", "value", { unique: true });
+        });
+
+        const seed = database.transaction("records", "readwrite");
+        const seedDone = transactionDone(seed);
+        seed.objectStore("records").add({ id: 1, value: "duplicate" });
+        await seedDone;
+
+        const transaction = database.transaction("records", "readwrite");
+        const done = transactionDone(transaction);
+        const duplicate = transaction
+            .objectStore("records")
+            .add({ id: 2, value: "duplicate" });
+        duplicate.onerror = event => event.preventDefault();
+        transaction
+            .objectStore("records")
+            .add({ id: 3, value: "survives" });
+        await done;
+
+        expect(
+            await requestResult(
+                database.transaction("records").objectStore("records").get(2)
+            )
+        ).to.equal(undefined);
+        expect(
+            (
+                await requestResult<any>(
+                    database.transaction("records").objectStore("records").get(3)
+                )
+            ).value
+        ).to.equal("survives");
+        database.close();
+    });
+
+    it("iterates bounded key ranges in key order", async function () {
+        // Adapted from WPT IndexedDB/idbcursor-continue.any.js and
+        // idbkeyrange-includes.any.js.
+        const name = databaseName("cursor");
+        const database = await openDatabase(name, 1, db => {
+            db.createObjectStore("records");
+        });
+
+        const write = database.transaction("records", "readwrite");
+        const writeDone = transactionDone(write);
+        for (let key = 5; key >= 1; --key) {
+            write.objectStore("records").put(`value-${key}`, key);
+        }
+        await writeDone;
+
+        const keys: number[] = [];
+        const cursorRequest = database
+            .transaction("records")
+            .objectStore("records")
+            .openCursor(IDBKeyRange.bound(2, 4));
+        await new Promise<void>((resolve, reject) => {
+            cursorRequest.onerror = () => reject(cursorRequest.error);
+            cursorRequest.onsuccess = () => {
+                const cursor = cursorRequest.result;
+                if (!cursor) {
+                    resolve();
+                    return;
+                }
+                keys.push(cursor.key as number);
+                cursor.continue();
+            };
+        });
+        expect(keys).to.eql([2, 3, 4]);
+        database.close();
+    });
+
+    it("dispatches versionchange before a blocked upgrade can finish", async function () {
+        // Adapted from WPT IndexedDB/idbfactory-open-request-error.any.js and
+        // open-request-queue.any.js.
+        const name = databaseName("versionchange");
+        const first = await openDatabase(name, 1, db => {
+            db.createObjectStore("records");
+        });
+
+        let oldVersion = -1;
+        let newVersion: number | null = -1;
+        first.onversionchange = event => {
+            oldVersion = event.oldVersion;
+            newVersion = event.newVersion;
+            first.close();
+        };
+
+        const second = await openDatabase(name, 2, () => {});
+        expect(oldVersion).to.equal(1);
+        expect(newVersion).to.equal(2);
+        expect(second.version).to.equal(2);
+        second.close();
+    });
+
+    it("throws DataCloneError synchronously for unsupported values", async function () {
+        // Adapted from WPT IndexedDB/structured-clone.any.js.
+        const name = databaseName("clone-error");
+        const database = await openDatabase(name, 1, db => {
+            db.createObjectStore("records");
+        });
+        const transaction = database.transaction("records", "readwrite");
+        let error: any;
+        try {
+            transaction.objectStore("records").put(() => {}, 1);
+        } catch (caught) {
+            error = caught;
+        }
+        expect(error).to.be.an.instanceof(DOMException);
+        expect(error.name).to.equal("DataCloneError");
+        transaction.abort();
+        database.close();
     });
 });
 

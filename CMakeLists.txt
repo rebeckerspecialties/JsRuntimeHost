@@ -51,6 +51,9 @@ FetchContent_Declare(UrlLib
     GIT_REPOSITORY https://github.com/BabylonJS/UrlLib.git
     GIT_TAG e86ffb34e77092266145497681efc74e0a920ffe
     EXCLUDE_FROM_ALL)
+FetchContent_Declare(zlib
+    URL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz"
+    EXCLUDE_FROM_ALL)
 FetchContent_Declare(quickjs-ng
     GIT_REPOSITORY https://github.com/quickjs-ng/quickjs.git
     GIT_TAG 93d3f7df465027f487ed37e175a0bc3012fee79e
@@ -110,6 +113,10 @@ option(JSRUNTIMEHOST_POLYFILL_FILE "Include JsRuntimeHost Polyfill File and File
 option(JSRUNTIMEHOST_POLYFILL_PERFORMANCE "Include JsRuntimeHost Polyfill Performance." ON)
 option(JSRUNTIMEHOST_POLYFILL_TEXTDECODER "Include JsRuntimeHost Polyfill TextDecoder." ON)
 option(JSRUNTIMEHOST_POLYFILL_TEXTENCODER "Include JsRuntimeHost Polyfill TextEncoder." ON)
+option(JSRUNTIMEHOST_POLYFILL_WORKER "Include JsRuntimeHost Polyfill Worker." ON)
+option(JSRUNTIMEHOST_POLYFILL_STREAMS "Include JsRuntimeHost Polyfill Web Streams." ON)
+option(JSRUNTIMEHOST_POLYFILL_COMPRESSION "Include JsRuntimeHost Polyfills CompressionStream and DecompressionStream." ON)
+option(JSRUNTIMEHOST_POLYFILL_INDEXEDDB "Include JsRuntimeHost Polyfill IndexedDB." ON)
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)

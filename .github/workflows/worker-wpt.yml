@@ -1,0 +1,29 @@
+name: Worker WPT
+
+on:
+  pull_request:
+    branches: [napi-v7]
+
+jobs:
+  Ubuntu_JSC:
+    uses: ./.github/workflows/build-linux.yml
+
+  Ubuntu_JSC_Sanitizers:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      cc: clang
+      cxx: clang++
+      enable-sanitizers: true
+
+  Ubuntu_QuickJS_ThreadSanitizer:
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      cc: clang
+      cxx: clang++
+      # Linux JSC suspends mutator threads with SIGUSR1. TSan intercepts the
+      # signal and deadlocks inside the uninstrumented system library, even
+      # with concurrent GC disabled. QuickJS still exercises the instrumented
+      # Worker ownership, message queues, and teardown paths without hiding
+      # host races behind an incompatible third-party runtime.
+      js-engine: QuickJS
+      enable-thread-sanitizer: true

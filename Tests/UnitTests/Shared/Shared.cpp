@@ -11,13 +11,21 @@
 #include <Babylon/Polyfills/Fetch.h>
 #include <Babylon/Polyfills/Blob.h>
 #include <Babylon/Polyfills/File.h>
+#include <Babylon/Polyfills/IndexedDB.h>
 #include <Babylon/Polyfills/TextDecoder.h>
 #include <Babylon/Polyfills/TextEncoder.h>
+#include <Babylon/Polyfills/Streams.h>
+#include <Babylon/Polyfills/Compression.h>
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+#include <Babylon/Polyfills/Worker.h>
+#endif
 #include <gtest/gtest.h>
 #include <arcana/threading/blocking_concurrent_queue.h>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <exception>
+#include <filesystem>
 #include <future>
 #include <iostream>
 #include <thread>
@@ -31,7 +39,6 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <fstream>
-#include <filesystem>
 #include <system_error>
 
 #include <AndroidExtensions/Globals.h>
@@ -271,11 +278,20 @@ TEST(JavaScript, All)
         Babylon::Polyfills::URL::Initialize(env);
         Babylon::Polyfills::WebSocket::Initialize(env);
         Babylon::Polyfills::XMLHttpRequest::Initialize(env);
-        Babylon::Polyfills::Fetch::Initialize(env);
+        Babylon::Polyfills::Streams::Initialize(env);
         Babylon::Polyfills::Blob::Initialize(env);
         Babylon::Polyfills::File::Initialize(env);
         Babylon::Polyfills::TextDecoder::Initialize(env);
         Babylon::Polyfills::TextEncoder::Initialize(env);
+        Babylon::Polyfills::Fetch::Initialize(env);
+        Babylon::Polyfills::Compression::Initialize(env);
+        Babylon::Polyfills::IndexedDB::Initialize(env);
+
+#if defined(JSRUNTIMEHOST_TEST_WORKER)
+        Babylon::Polyfills::Worker::Options workerOptions{};
+        workerOptions.ScriptRoot = std::filesystem::current_path().string();
+        Babylon::Polyfills::Worker::Initialize(env, std::move(workerOptions));
+#endif
 
         auto setExitCodeCallback = Napi::Function::New(
             env, [&exitCodePromise](const Napi::CallbackInfo& info) {
@@ -295,6 +311,221 @@ TEST(JavaScript, All)
     auto exitCode{exitCodePromise.get_future().get()};
 
     EXPECT_EQ(exitCode, 0);
+}
+
+TEST(Streams, ReplacesPartialHostSuiteAndIsIdempotent)
+{
+    std::promise<std::string> done;
+    std::atomic_bool completed{};
+    const auto complete = [&done, &completed](std::string result) {
+        if (!completed.exchange(true))
+        {
+            done.set_value(std::move(result));
+        }
+    };
+
+    Babylon::AppRuntime::Options options{};
+    options.UnhandledExceptionHandler = [&complete](const Napi::Error& error) {
+        complete(Napi::GetErrorString(error));
+    };
+    Babylon::AppRuntime runtime{options};
+
+    runtime.Dispatch([&complete](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostReadableStream = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostReadableStream");
+        global.Set("ReadableStream", hostReadableStream);
+        global.Set("TransformStream", env.Null());
+
+        Babylon::Polyfills::Streams::Initialize(env);
+        const auto installedReadableStream = global.Get("ReadableStream");
+        const auto installedTransformStream = global.Get("TransformStream");
+        EXPECT_FALSE(installedReadableStream.StrictEquals(hostReadableStream));
+        if (!installedReadableStream.IsFunction() || !installedTransformStream.IsFunction())
+        {
+            complete("Streams::Initialize did not install a complete constructor suite.");
+            return;
+        }
+
+        const auto transform = installedTransformStream.As<Napi::Function>().New({});
+        EXPECT_TRUE(transform.Get("readable").As<Napi::Object>().InstanceOf(installedReadableStream.As<Napi::Function>()));
+
+        Babylon::Polyfills::Streams::Initialize(env);
+        EXPECT_TRUE(global.Get("ReadableStream").StrictEquals(installedReadableStream));
+        EXPECT_TRUE(global.Get("TransformStream").StrictEquals(installedTransformStream));
+        complete({});
+    });
+
+    const auto error = done.get_future().get();
+    EXPECT_TRUE(error.empty()) << error;
+}
+
+TEST(Compression, PreservesHostConstructorsAndIsIdempotent)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> done;
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostCompressionStream = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostCompressionStream");
+        global.Set("CompressionStream", hostCompressionStream);
+
+        Babylon::Polyfills::Compression::Initialize(env);
+        EXPECT_TRUE(global.Get("CompressionStream").StrictEquals(hostCompressionStream));
+        EXPECT_TRUE(global.Get("DecompressionStream").IsFunction());
+
+        const auto installedDecompressionStream = global.Get("DecompressionStream");
+        Babylon::Polyfills::Compression::Initialize(env);
+        EXPECT_TRUE(global.Get("CompressionStream").StrictEquals(hostCompressionStream));
+        EXPECT_TRUE(global.Get("DecompressionStream").StrictEquals(installedDecompressionStream));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
+TEST(IndexedDB, PreservesHostImplementation)
+{
+    std::promise<void> done;
+    Babylon::AppRuntime runtime{};
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        auto hostIndexedDB = Napi::Object::New(env);
+        global.Set("indexedDB", hostIndexedDB);
+
+        Babylon::Polyfills::IndexedDB::Initialize(env);
+        EXPECT_TRUE(global.Get("indexedDB").StrictEquals(hostIndexedDB));
+
+        Babylon::Polyfills::IndexedDB::Initialize(env);
+        EXPECT_TRUE(global.Get("indexedDB").StrictEquals(hostIndexedDB));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
+TEST(Fetch, PreservesCompleteHostClassesAndIsIdempotent)
+{
+    std::promise<std::string> done;
+    std::atomic_bool completed{};
+    const auto complete = [&done, &completed](std::string result) {
+        if (!completed.exchange(true))
+        {
+            done.set_value(std::move(result));
+        }
+    };
+
+    Babylon::AppRuntime::Options options{};
+    options.UnhandledExceptionHandler = [&complete](const Napi::Error& error) {
+        complete(Napi::GetErrorString(error));
+    };
+    Babylon::AppRuntime runtime{options};
+
+    runtime.Dispatch([&complete](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostHeaders = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostHeaders");
+        const auto hostResponse = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostResponse");
+        global.Set("Headers", hostHeaders);
+        global.Set("Response", hostResponse);
+
+        Babylon::Polyfills::Fetch::Initialize(env);
+        EXPECT_TRUE(global.Get("Headers").StrictEquals(hostHeaders));
+        EXPECT_TRUE(global.Get("Response").StrictEquals(hostResponse));
+
+        const auto installedFetch = global.Get("fetch");
+        Babylon::Polyfills::Fetch::Initialize(env);
+        EXPECT_TRUE(global.Get("Headers").StrictEquals(hostHeaders));
+        EXPECT_TRUE(global.Get("Response").StrictEquals(hostResponse));
+        EXPECT_TRUE(global.Get("fetch").StrictEquals(installedFetch));
+        complete({});
+    });
+
+    const auto error = done.get_future().get();
+    EXPECT_TRUE(error.empty()) << error;
+}
+
+TEST(Fetch, ReplacesPartialOrNullHostClassesAsACompletePair)
+{
+    std::promise<std::string> done;
+    std::atomic_bool completed{};
+    const auto complete = [&done, &completed](std::string result) {
+        if (!completed.exchange(true))
+        {
+            done.set_value(std::move(result));
+        }
+    };
+
+    Babylon::AppRuntime::Options options{};
+    options.UnhandledExceptionHandler = [&complete](const Napi::Error& error) {
+        complete(Napi::GetErrorString(error));
+    };
+    Babylon::AppRuntime runtime{options};
+
+    runtime.Dispatch([&complete](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostHeaders = Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostHeaders");
+        global.Set("Headers", hostHeaders);
+        global.Set("Response", env.Null());
+
+        Babylon::Polyfills::Fetch::Initialize(env);
+        const auto installedHeaders = global.Get("Headers");
+        const auto installedResponse = global.Get("Response");
+        EXPECT_FALSE(installedHeaders.StrictEquals(hostHeaders));
+        if (!installedHeaders.IsFunction() || !installedResponse.IsFunction())
+        {
+            complete("Fetch::Initialize did not install a complete Headers/Response pair.");
+            return;
+        }
+
+        const auto response = installedResponse.As<Napi::Function>().New({});
+        EXPECT_TRUE(response.Get("headers").As<Napi::Object>().InstanceOf(installedHeaders.As<Napi::Function>()));
+
+        Babylon::Polyfills::Fetch::Initialize(env);
+        EXPECT_TRUE(global.Get("Headers").StrictEquals(installedHeaders));
+        EXPECT_TRUE(global.Get("Response").StrictEquals(installedResponse));
+        complete({});
+    });
+
+    const auto error = done.get_future().get();
+    EXPECT_TRUE(error.empty()) << error;
+}
+
+TEST(IndexedDB, InstallsBrowserGlobals)
+{
+    std::promise<void> done;
+    Babylon::AppRuntime runtime{};
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        try
+        {
+            auto global = env.Global();
+            Babylon::Polyfills::IndexedDB::Initialize(env);
+
+            EXPECT_TRUE(global.Get("globalThis").StrictEquals(global));
+            auto indexedDB = global.Get("indexedDB");
+            EXPECT_TRUE(indexedDB.IsObject());
+            if (indexedDB.IsObject())
+            {
+                EXPECT_TRUE(indexedDB.As<Napi::Object>().Get("open").IsFunction());
+            }
+            EXPECT_TRUE(global.Get("IDBKeyRange").IsFunction());
+            EXPECT_TRUE(global.Get("IDBTransaction").IsFunction());
+
+            Babylon::Polyfills::IndexedDB::Initialize(env);
+            EXPECT_TRUE(global.Get("indexedDB").StrictEquals(indexedDB));
+        }
+        catch (const std::exception& error)
+        {
+            ADD_FAILURE() << "IndexedDB initialization failed: " << error.what();
+        }
+        catch (...)
+        {
+            ADD_FAILURE() << "IndexedDB initialization failed";
+        }
+        done.set_value();
+    });
+
+    done.get_future().get();
 }
 
 TEST(Console, Log)
@@ -464,6 +695,106 @@ TEST(AppRuntime, DestroyDoesNotDeadlock)
 
     testThread.join();
 }
+
+#if defined(JSRUNTIMEHOST_TEST_WORKER) && !defined(__ANDROID__) && \
+    (defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE) || defined(JSR_NAPI_ENGINE_QUICKJS) || \
+     defined(JSR_NAPI_ENGINE_V8) || defined(JSR_NAPI_ENGINE_HERMES))
+TEST(Worker, PreservesHostDOMException)
+{
+    std::promise<void> done;
+    Babylon::AppRuntime runtime{};
+
+    runtime.Dispatch([&done](Napi::Env env) {
+        auto global = env.Global();
+        const auto hostDOMException =
+            Napi::Function::New(env, [](const Napi::CallbackInfo&) {}, "HostDOMException");
+        global.Set("DOMException", hostDOMException);
+
+        Babylon::Polyfills::Worker::Options options{};
+        options.ScriptRoot = std::filesystem::current_path().string();
+        Babylon::Polyfills::Worker::Initialize(env, std::move(options));
+
+        // Worker is composed with independent browser polyfills. Installing
+        // its lifecycle/event glue must not invalidate exceptions created by
+        // IndexedDB (or another host implementation) before Worker starts.
+        EXPECT_TRUE(global.Get("DOMException").StrictEquals(hostDOMException));
+        done.set_value();
+    });
+
+    done.get_future().get();
+}
+
+TEST(Worker, WebPlatformTests)
+{
+    struct Result
+    {
+        bool Passed{};
+        std::string Detail{};
+    };
+
+    std::promise<Result> completion;
+    std::atomic_bool completed{false};
+
+    Babylon::AppRuntime::Options runtimeOptions{};
+    runtimeOptions.UnhandledExceptionHandler = [&completion, &completed](const Napi::Error& error) {
+        if (!completed.exchange(true))
+        {
+            completion.set_value({false, Napi::GetErrorString(error)});
+        }
+    };
+
+    Babylon::AppRuntime runtime{std::move(runtimeOptions)};
+    runtime.Dispatch([&completion, &completed](Napi::Env env) {
+        Babylon::Polyfills::Scheduling::Initialize(env);
+        Babylon::Polyfills::URL::Initialize(env);
+
+        Babylon::Polyfills::Worker::Options options{};
+        options.ScriptRoot = (std::filesystem::current_path() / "WebPlatformTests").string();
+        options.ConsoleCallback = [](const char* message) {
+            std::cerr << "[Worker] " << message << std::endl;
+        };
+        Babylon::Polyfills::Worker::Initialize(env, std::move(options));
+
+#if defined(JSR_NAPI_ENGINE_JAVASCRIPTCORE)
+        // System JSC exposes the execution-time-limit hook used to interrupt
+        // a worker stuck in top-level evaluation. Other adapters currently
+        // terminate cooperatively between dispatches, so the infinite-loop
+        // WPT regression is intentionally JSC-only for now.
+        env.Global().Set("__jsrhCanInterruptWorker", Napi::Boolean::New(env, true));
+#else
+        env.Global().Set("__jsrhCanInterruptWorker", Napi::Boolean::New(env, false));
+#endif
+
+        env.Global().Set("__jsrhWptDone", Napi::Function::New(
+            env,
+            [&completion, &completed](const Napi::CallbackInfo& info) {
+                if (!completed.exchange(true))
+                {
+                    completion.set_value({
+                        info[0].ToBoolean().Value(),
+                        info[1].ToString().Utf8Value(),
+                    });
+                }
+            },
+            "__jsrhWptDone"));
+        env.Global().Set("__jsrhWptProgress", Napi::Function::New(
+            env,
+            [](const Napi::CallbackInfo& info) {
+                std::cerr << "[Worker WPT] " << info[0].ToString().Utf8Value() << std::endl;
+            },
+            "__jsrhWptProgress"));
+    });
+
+    Babylon::ScriptLoader loader{runtime};
+    loader.LoadScript("app:///WebPlatformTests/runner.js");
+
+    auto future = completion.get_future();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds{90}), std::future_status::ready)
+        << "Worker WPT subset timed out";
+    const auto result = future.get();
+    EXPECT_TRUE(result.Passed) << result.Detail;
+}
+#endif
 
 // The V8JSI Node-API shim does not implement napi_create_dataview /
 // napi_get_dataview_info (its DataView::New throws "TODO"), so this native test
