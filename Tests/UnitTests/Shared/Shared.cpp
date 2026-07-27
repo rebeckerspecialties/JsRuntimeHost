@@ -554,9 +554,10 @@ TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
         const auto detachStatus = napi_detach_arraybuffer(env, arrayBuffer);
         if (detachStatus != napi_ok)
         {
-            // Frozen JavaScriptCore builds have no public detach primitive.
-            // They remain capability-gated; current Apple JSC and the other
-            // detachable backends execute the assertions below.
+            // Frozen JavaScriptCore builds have no public detach primitive,
+            // and transitional JSC may refuse detachment after Node-API has
+            // exposed the backing pointer. Node-API explicitly permits those
+            // engine-specific detachability conditions.
             napi_value pendingException{nullptr};
             napi_get_and_clear_last_exception(env, &pendingException);
             result.set_value(0x3Fu);
