@@ -2057,18 +2057,19 @@ napi_status napi_is_detached_arraybuffer(napi_env env, napi_value arraybuffer, b
   } else {
     // Some JSC C-API releases expose transfer() before the standards-track
     // `detached` getter, and may keep returning the former backing-store
-    // address after transfer. Constructing even a zero-length typed view is a
-    // non-mutating, engine-enforced detached-buffer check that also correctly
-    // distinguishes an attached zero-length ArrayBuffer.
-    JSValueRef viewException{};
-    JSObjectMakeTypedArrayWithArrayBufferAndOffset(
-      env->context,
-      kJSTypedArrayTypeUint8Array,
-      ab,
-      0,
-      0,
-      &viewException);
-    *result = viewException != nullptr;
+    // address after transfer. ArrayBuffer.prototype.slice performs the
+    // ECMAScript detached-buffer check before copying; a zero-argument call is
+    // non-mutating and still succeeds for a valid attached zero-length buffer.
+    JSValueRef sliceException{};
+    JSValueRef slice = JSObjectGetProperty(env->context, ab, JSString("slice"), &sliceException);
+    CHECK_JSC(env, sliceException);
+    if (!JSValueIsObject(env->context, slice)) {
+      return napi_set_last_error(env, napi_generic_failure);
+    }
+    JSObjectRef sliceFn = JSValueToObject(env->context, slice, &sliceException);
+    CHECK_JSC(env, sliceException);
+    JSObjectCallAsFunction(env->context, sliceFn, ab, 0, nullptr, &sliceException);
+    *result = sliceException != nullptr;
   }
   return napi_ok;
 }

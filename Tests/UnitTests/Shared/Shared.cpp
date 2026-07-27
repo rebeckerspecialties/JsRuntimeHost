@@ -875,7 +875,7 @@ TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
     // the assumption that they could never change. Detachment disproves that
     // assumption, and WebGPU keeps wrapper instances alive across unmap().
     Babylon::AppRuntime runtime{};
-    std::promise<bool> result;
+    std::promise<uint32_t> result;
 
     runtime.Dispatch([&result](Napi::Env env) {
         auto arrayBuffer = Napi::ArrayBuffer::New(env, 16);
@@ -890,7 +890,7 @@ TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
             // detachable backends execute the assertions below.
             napi_value pendingException{nullptr};
             napi_get_and_clear_last_exception(env, &pendingException);
-            result.set_value(true);
+            result.set_value(0x3Fu);
             return;
         }
 
@@ -900,15 +900,17 @@ TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
         const auto afterLength = arrayBuffer.ByteLength();
 
         result.set_value(
-            beforeData != nullptr &&
-            beforeLength == 16 &&
-            detachedStatus == napi_ok &&
-            detached &&
-            afterData == nullptr &&
-            afterLength == 0);
+            (beforeData != nullptr ? 1u << 0 : 0u) |
+            (beforeLength == 16 ? 1u << 1 : 0u) |
+            (detachedStatus == napi_ok ? 1u << 2 : 0u) |
+            (detached ? 1u << 3 : 0u) |
+            (afterData == nullptr ? 1u << 4 : 0u) |
+            (afterLength == 0 ? 1u << 5 : 0u));
     });
 
-    EXPECT_TRUE(result.get_future().get());
+    EXPECT_EQ(0x3Fu, result.get_future().get())
+        << "bits: initial data, initial length, detached status, detached state, "
+           "detached data, detached length";
 }
 #endif
 
