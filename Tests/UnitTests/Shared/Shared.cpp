@@ -770,7 +770,7 @@ TEST(NodeApi, CreateDataViewRejectsOverflowingRange)
 }
 #endif
 
-#if NAPI_VERSION >= 7 && !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
+#if NAPI_VERSION >= 7 && !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI) && !defined(JSR_NAPI_ENGINE_CHAKRA)
 TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
 {
     // Regression: Napi::ArrayBuffer used to cache Data()/ByteLength() under
