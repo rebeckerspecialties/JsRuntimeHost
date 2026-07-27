@@ -2011,9 +2011,20 @@ napi_status napi_is_detached_arraybuffer(napi_env env, napi_value arraybuffer, b
   if (JSValueIsBoolean(env->context, detached)) {
     *result = JSValueToBoolean(env->context, detached);
   } else {
-    // Pre-ES2024 fallback: a detached buffer has no backing store.
-    JSValueRef ignored{};
-    *result = JSObjectGetArrayBufferBytesPtr(env->context, ab, &ignored) == nullptr;
+    // Some JSC C-API releases expose transfer() before the standards-track
+    // `detached` getter, and may keep returning the former backing-store
+    // address after transfer. Constructing even a zero-length typed view is a
+    // non-mutating, engine-enforced detached-buffer check that also correctly
+    // distinguishes an attached zero-length ArrayBuffer.
+    JSValueRef viewException{};
+    JSObjectMakeTypedArrayWithArrayBufferAndOffset(
+      env->context,
+      kJSTypedArrayTypeUint8Array,
+      ab,
+      0,
+      0,
+      &viewException);
+    *result = viewException != nullptr;
   }
   return napi_ok;
 }
