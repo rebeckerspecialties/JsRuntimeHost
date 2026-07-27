@@ -537,6 +537,50 @@ TEST(NodeApi, CreateDataViewRejectsOverflowingRange)
 }
 #endif
 
+#if NAPI_VERSION >= 7 && !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
+TEST(NodeApi, ArrayBufferWrapperRefreshesInfoAfterDetach)
+{
+    // Regression: Napi::ArrayBuffer used to cache Data()/ByteLength() under
+    // the assumption that they could never change. Detachment disproves that
+    // assumption, and WebGPU keeps wrapper instances alive across unmap().
+    Babylon::AppRuntime runtime{};
+    std::promise<bool> result;
+
+    runtime.Dispatch([&result](Napi::Env env) {
+        auto arrayBuffer = Napi::ArrayBuffer::New(env, 16);
+        const auto* beforeData = arrayBuffer.Data();
+        const auto beforeLength = arrayBuffer.ByteLength();
+
+        const auto detachStatus = napi_detach_arraybuffer(env, arrayBuffer);
+        if (detachStatus != napi_ok)
+        {
+            // Frozen JavaScriptCore builds have no public detach primitive.
+            // They remain capability-gated; current Apple JSC and the other
+            // detachable backends execute the assertions below.
+            napi_value pendingException{nullptr};
+            napi_get_and_clear_last_exception(env, &pendingException);
+            result.set_value(true);
+            return;
+        }
+
+        bool detached{false};
+        const auto detachedStatus = napi_is_detached_arraybuffer(env, arrayBuffer, &detached);
+        const auto* afterData = arrayBuffer.Data();
+        const auto afterLength = arrayBuffer.ByteLength();
+
+        result.set_value(
+            beforeData != nullptr &&
+            beforeLength == 16 &&
+            detachedStatus == napi_ok &&
+            detached &&
+            afterData == nullptr &&
+            afterLength == 0);
+    });
+
+    EXPECT_TRUE(result.get_future().get());
+}
+#endif
+
 #if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 TEST(NodeApi, ThrowApisReturnOkAndLeaveExceptionPending)
 {
