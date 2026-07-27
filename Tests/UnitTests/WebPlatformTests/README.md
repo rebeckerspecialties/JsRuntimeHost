@@ -1,20 +1,19 @@
-# Pinned Worker WPT subset
+# Focused Worker conformance regressions
 
 `UPSTREAM_REVISION` records the exact
 [web-platform-tests/wpt](https://github.com/web-platform-tests/wpt) commit used
-for this directory. `LICENSE.md`, `resources/testharness.js`, and the files
-below are copied from that revision:
+when the broader suite is run outside this repository. The WPT checkout and
+`testharness.js` are deliberately not vendored.
 
-- `workers/interfaces/DedicatedWorkerGlobalScope/EventTarget.worker.js`
-- `workers/interfaces/DedicatedWorkerGlobalScope/onmessage.worker.js`
-- `workers/interfaces/DedicatedWorkerGlobalScope/postMessage/return-value.worker.js`
-- `workers/interfaces/WorkerGlobalScope/self.any.js`
-- `workers/interfaces/WorkerUtils/importScripts/001.worker.js`
-- `workers/support/Worker-structure-message.js`
-- `workers/constructors/Worker/terminate.js`
+`workers/focused-api.js` is a small host-native port of eight assertions that
+found real gaps in the initial implementation: worker-global identity and
+readonly behavior, EventTarget removal/targeting, `onmessage` normalization and
+dispatch, `postMessage()`'s return value, and zero-argument `importScripts()`.
+The source links are kept in that file. `workers/support/Worker-structure-message.js`
+and `workers/constructors/Worker/terminate.js` are two additional focused WPT
+ports for structured transfer and termination.
 
-`self.worker.js` is a local worker-harness wrapper for `self.any.js`.
-`runner.js` replaces WPT's browser document/server runner: it launches the
-worker tests sequentially, consumes `testharness.js` completion records, and
-adapts the document-side structured-clone, transfer, and termination checks to
-the JsRuntimeHost unit-test host.
+`runner.js` launches these focused tests directly, without WPT infrastructure,
+and adapts document-side structured-clone, transfer, and termination checks to
+the JsRuntimeHost unit-test host. It also carries a linked regression for
+Servo's throwing-getter structured-clone fix.

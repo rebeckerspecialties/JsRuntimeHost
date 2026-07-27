@@ -93,7 +93,7 @@ if(TARGET Worker)
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests"
             "$<TARGET_FILE_DIR:UnitTests>/WebPlatformTests"
-        COMMENT "Copying pinned Web Platform Tests Worker subset")
+        COMMENT "Copying focused Worker conformance regressions")
 endif()
 
 if(APPLE)
