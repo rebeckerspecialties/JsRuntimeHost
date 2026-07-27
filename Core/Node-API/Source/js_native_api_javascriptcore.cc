@@ -2706,6 +2706,22 @@ napi_status napi_get_arraybuffer_info(napi_env env,
   CHECK_ENV(env);
   CHECK_ARG(env, arraybuffer);
 
+  // JSObjectGetArrayBufferBytesPtr may keep returning the former backing-store
+  // address after ArrayBuffer.prototype.transfer() detaches a buffer. Normalize
+  // the observable Node-API state before consulting those JavaScriptCore C APIs
+  // so wrappers cannot retain a dangling pointer.
+  bool detached = false;
+  CHECK_NAPI(napi_is_detached_arraybuffer(env, arraybuffer, &detached));
+  if (detached) {
+    if (data != nullptr) {
+      *data = nullptr;
+    }
+    if (byte_length != nullptr) {
+      *byte_length = 0;
+    }
+    return napi_ok;
+  }
+
   JSValueRef exception{};
 
   if (data != nullptr) {
