@@ -1585,40 +1585,63 @@ napi_status napi_throw(napi_env env, napi_value error) {
   // Throw into the CURRENT execution context, not the stored context
   JSContext* targetCtx = env->current_context ? env->current_context : env->context;
   JS_Throw(targetCtx, JS_DupValue(targetCtx, jsError));
-  
-  return napi_set_last_error(env, napi_pending_exception);
+
+  // Per Node-API, successfully scheduling the exception returns napi_ok.
+  // Reporting napi_pending_exception here makes node-addon-api's
+  // Error::ThrowAsJavaScriptException throw a second C++ exception while it is
+  // already translating the first one.
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw error
 napi_status napi_throw_error(napi_env env, const char* code, const char* msg) {
   CHECK_ENV(env);
 
-  JSValue error = JS_NewError(env->context);
+  JSContext* targetCtx = env->current_context ? env->current_context : env->context;
+  JSValue error = JS_NewError(targetCtx);
   if (msg) {
-    JS_SetPropertyStr(env->context, error, "message", JS_NewString(env->context, msg));
+    JS_SetPropertyStr(targetCtx, error, "message", JS_NewString(targetCtx, msg));
   }
   if (code) {
-    JS_SetPropertyStr(env->context, error, "code", JS_NewString(env->context, code));
+    JS_SetPropertyStr(targetCtx, error, "code", JS_NewString(targetCtx, code));
   }
 
-  JS_Throw(env->context, error);
-  return napi_set_last_error(env, napi_pending_exception);
+  JS_Throw(targetCtx, error);
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw type error
 napi_status napi_throw_type_error(napi_env env, const char* code, const char* msg) {
   CHECK_ENV(env);
 
-  JS_ThrowTypeError(env->context, "%s", msg ? msg : "");
-  return napi_set_last_error(env, napi_pending_exception);
+  JSContext* targetCtx = env->current_context ? env->current_context : env->context;
+  JS_ThrowTypeError(targetCtx, "%s", msg ? msg : "");
+  if (code) {
+    JSValue error = JS_GetException(targetCtx);
+    JS_SetPropertyStr(targetCtx, error, "code", JS_NewString(targetCtx, code));
+    JS_Throw(targetCtx, error);
+  }
+
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw range error
 napi_status napi_throw_range_error(napi_env env, const char* code, const char* msg) {
   CHECK_ENV(env);
 
-  JS_ThrowRangeError(env->context, "%s", msg ? msg : "");
-  return napi_set_last_error(env, napi_pending_exception);
+  JSContext* targetCtx = env->current_context ? env->current_context : env->context;
+  JS_ThrowRangeError(targetCtx, "%s", msg ? msg : "");
+  if (code) {
+    JSValue error = JS_GetException(targetCtx);
+    JS_SetPropertyStr(targetCtx, error, "code", JS_NewString(targetCtx, code));
+    JS_Throw(targetCtx, error);
+  }
+
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Create error

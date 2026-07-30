@@ -351,6 +351,55 @@ TEST(NodeApi, CreateDataViewRejectsOverflowingRange)
 }
 #endif
 
+#if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
+TEST(NodeApi, ThrowApisReturnOkAndLeaveExceptionPending)
+{
+    // Node-API's throw functions return napi_ok when the exception was
+    // successfully scheduled. In particular, they must not return
+    // napi_pending_exception: node-addon-api treats any non-ok return from
+    // Error::ThrowAsJavaScriptException as a second C++ error while translating
+    // the original exception.
+    Babylon::AppRuntime runtime{};
+    std::promise<bool> result;
+
+    runtime.Dispatch([&result](Napi::Env env) {
+        napi_env nenv{env};
+        bool passed{true};
+
+        const auto clearPending = [&]() {
+            bool pending{false};
+            napi_value exception{nullptr};
+            passed = passed &&
+                napi_is_exception_pending(nenv, &pending) == napi_ok &&
+                pending &&
+                napi_get_and_clear_last_exception(nenv, &exception) == napi_ok &&
+                exception != nullptr;
+        };
+
+        napi_value message{nullptr};
+        napi_value error{nullptr};
+        passed = passed &&
+            napi_create_string_utf8(nenv, "boom", NAPI_AUTO_LENGTH, &message) == napi_ok &&
+            napi_create_error(nenv, nullptr, message, &error) == napi_ok &&
+            napi_throw(nenv, error) == napi_ok;
+        clearPending();
+
+        passed = passed && napi_throw_error(nenv, "ERR_TEST", "boom") == napi_ok;
+        clearPending();
+
+        passed = passed && napi_throw_type_error(nenv, "ERR_TEST", "boom") == napi_ok;
+        clearPending();
+
+        passed = passed && napi_throw_range_error(nenv, "ERR_TEST", "boom") == napi_ok;
+        clearPending();
+
+        result.set_value(passed);
+    });
+
+    EXPECT_TRUE(result.get_future().get());
+}
+#endif
+
 // The V8JSI Node-API shim does not expose napi_get_value_string_utf16, so this
 // native test only builds on the Chakra, V8, and JavaScriptCore backends.
 #if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
