@@ -48,8 +48,8 @@ FetchContent_Declare(llhttp
     URL "https://github.com/nodejs/llhttp/archive/refs/tags/release/v8.1.0.tar.gz"
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(UrlLib
-    GIT_REPOSITORY https://github.com/BabylonJS/UrlLib.git
-    GIT_TAG 0c991337a1160ba7a2d062bf8e342d0a66f48dc9
+    GIT_REPOSITORY https://github.com/rebeckerspecialties/UrlLib.git
+    GIT_TAG 80f39e7591dcdfb73849d30b9c30ceebaae5de6b
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(zlib
     URL "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz"
