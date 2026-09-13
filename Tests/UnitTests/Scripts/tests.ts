@@ -642,6 +642,71 @@ describe("fetch", function () {
         expect(await response.text()).to.equal("var symlink_target_js = true;");
     });
 
+    it("should resolve percent-encoded data URLs locally", async function () {
+        const url = "data:text/plain;charset=utf-8,hello%20native%20fetch%21";
+        const response = await fetch(url);
+        expect(response.ok).to.equal(true);
+        expect(response.status).to.equal(200);
+        expect(response.url).to.equal(url);
+        expect(response.headers.get("content-type")).to.equal("text/plain;charset=utf-8");
+        expect(await response.text()).to.equal("hello native fetch!");
+    });
+
+    it("should decode base64 data URLs without using the network transport", async function () {
+        const response = await fetch("data:application/octet-stream;base64,AAEC/w==");
+        const clone = response.clone();
+        expect(new Uint8Array(await response.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+        const blob = await clone.blob();
+        expect(blob.type).to.equal("application/octet-stream");
+        expect(new Uint8Array(await blob.arrayBuffer())).to.eql(new Uint8Array([0, 1, 2, 255]));
+    });
+
+    // Adapted from WPT fetch/data-urls/processing.any.js and resources/data-urls.json.
+    const dataUrlCases: Array<[string, string, number[]]> = [
+        ["data:,", "text/plain;charset=US-ASCII", []],
+        ["data:,%FF", "text/plain;charset=US-ASCII", [255]],
+        ["data:text/plain,X", "text/plain", [88]],
+        ["data:,X#fragment", "text/plain;charset=US-ASCII", [88]],
+        ["data:;BASe64,WA", "text/plain;charset=US-ASCII", [88]],
+        ["data:  ;charset=x   ;  base64,W%20A", "text/plain;charset=x", [88]]
+    ];
+
+    for (const [url, expectedType, expectedBody] of dataUrlCases) {
+        it(`should process WPT data URL case ${JSON.stringify(url)}`, async function () {
+            const response = await fetch(url);
+            expect(response.headers.get("content-type")).to.equal(expectedType);
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).to.eql(expectedBody);
+        });
+    }
+
+    // Adapted from WPT's forgiving-base64 vectors and Chromium's DataURL tests.
+    const base64Cases: Array<[string, number[]]> = [
+        ["abcd", [105, 183, 29]],
+        ["ab%09%0A%0C%0D%20cd", [105, 183, 29]],
+        ["ab==", [105]],
+        ["/A", [252]],
+        ["YR", [97]]
+    ];
+
+    for (const [encoded, expectedBody] of base64Cases) {
+        it(`should forgiving-base64 decode ${JSON.stringify(encoded)}`, async function () {
+            const response = await fetch(`data:application/octet-stream;base64,${encoded}`);
+            expect(Array.from(new Uint8Array(await response.arrayBuffer()))).to.eql(expectedBody);
+        });
+    }
+
+    for (const encoded of ["a", "ab===", "ab%0Bcd", "=a", "a=b"]) {
+        it(`should reject invalid WPT base64 case ${JSON.stringify(encoded)}`, async function () {
+            let error: unknown;
+            try {
+                await fetch(`data:application/octet-stream;base64,${encoded}`);
+            } catch (caught) {
+                error = caught;
+            }
+            expect(error).to.be.instanceOf(TypeError);
+        });
+    }
+
     it("arrayBuffer() should return the body as bytes", async function () {
         const response = await fetch("app:///Scripts/symlink_target.js");
         const expected = new Uint8Array("var symlink_target_js = true;".split("").map(x => x.charCodeAt(0)));
@@ -2435,6 +2500,162 @@ describe("Compression streams", function () {
             const output = await transformChunks(new DecompressionStream("gzip"), [fixture]);
             expect(Array.from(output)).to.deep.equal(Array.from(expectedOutput));
         }
+    });
+});
+
+describe("Web Streams", function () {
+    // Focused ports from the WHATWG Streams WPT suites at c05b4473:
+    // readable-streams/general.any.js and tee.any.js,
+    // writable-streams/write.any.js, and transform-streams/general.any.js.
+    it("installs the standard stream constructors", function () {
+        expect(ReadableStream).to.be.a("function");
+        expect(WritableStream).to.be.a("function");
+        expect(TransformStream).to.be.a("function");
+        expect(ByteLengthQueuingStrategy).to.be.a("function");
+        expect(CountQueuingStrategy).to.be.a("function");
+    });
+
+    it("delivers queued chunks in order and closes the reader", async function () {
+        const stream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("a");
+                controller.enqueue("b");
+                controller.close();
+            }
+        });
+        const reader = stream.getReader();
+
+        expect(await reader.read()).to.deep.equal({ value: "a", done: false });
+        expect(await reader.read()).to.deep.equal({ value: "b", done: false });
+        expect(await reader.read()).to.deep.equal({ value: undefined, done: true });
+        await reader.closed;
+    });
+
+    it("propagates a rejected pull to read and closed", async function () {
+        const failure = new Error("pull failed");
+        const reader = new ReadableStream({
+            pull() {
+                return Promise.reject(failure);
+            }
+        }).getReader();
+
+        let readFailure: unknown;
+        let closedFailure: unknown;
+        try { await reader.read(); } catch (error) { readFailure = error; }
+        try { await reader.closed; } catch (error) { closedFailure = error; }
+        expect(readFailure).to.equal(failure);
+        expect(closedFailure).to.equal(failure);
+    });
+
+    it("tees without one branch consuming the other", async function () {
+        const [first, second] = new ReadableStream({
+            start(controller) {
+                controller.enqueue("a");
+                controller.enqueue("b");
+                controller.close();
+            }
+        }).tee();
+        const firstReader = first.getReader();
+        const secondReader = second.getReader();
+
+        expect(await firstReader.read()).to.deep.equal({ value: "a", done: false });
+        expect(await firstReader.read()).to.deep.equal({ value: "b", done: false });
+        expect(await firstReader.read()).to.deep.equal({ value: undefined, done: true });
+        expect(await secondReader.read()).to.deep.equal({ value: "a", done: false });
+    });
+
+    it("waits for asynchronous writes before closing", async function () {
+        const stored: number[] = [];
+        const writable = new WritableStream({
+            write(chunk) {
+                return Promise.resolve().then(() => stored.push(chunk));
+            }
+        });
+        const writer = writable.getWriter();
+
+        writer.write(1);
+        writer.write(2);
+        await writer.close();
+        expect(stored).to.deep.equal([1, 2]);
+    });
+
+    it("applies transform output and backpressure", async function () {
+        const transform = new TransformStream({
+            transform(chunk, controller) {
+                controller.enqueue(chunk.toUpperCase());
+            }
+        });
+        const writer = transform.writable.getWriter();
+        const reader = transform.readable.getReader();
+        const write = writer.write("native");
+
+        expect(await reader.read()).to.deep.equal({ value: "NATIVE", done: false });
+        await write;
+        await writer.close();
+        expect(await reader.read()).to.deep.equal({ value: undefined, done: true });
+    });
+
+    it("supports BYOB reads from byte streams", async function () {
+        let sent = false;
+        const stream = new ReadableStream({
+            type: "bytes",
+            pull(controller) {
+                if (!sent) {
+                    sent = true;
+                    controller.enqueue(new Uint8Array([8, 241, 48, 123, 151]));
+                    controller.close();
+                }
+            }
+        } as any);
+        const reader = stream.getReader({ mode: "byob" });
+        const result = await reader.read(new Uint8Array(8));
+
+        expect(result.done).to.equal(false);
+        expect(Array.from(result.value!)).to.deep.equal([8, 241, 48, 123, 151]);
+        expect((await reader.read(new Uint8Array(8))).done).to.equal(true);
+    });
+
+    // Ported from Firefox's dom/streams/test/xpcshell/subclassing.js.
+    it("supports subclassed streams, readers, and queuing strategies", async function () {
+        class SubclassedStream extends ReadableStream {}
+        class SubclassedStrategy extends CountQueuingStrategy {}
+        const stream = new SubclassedStream({
+            start(controller) {
+                controller.enqueue("first");
+                controller.close();
+            }
+        });
+        const Reader = stream.getReader().constructor as typeof ReadableStreamDefaultReader;
+        class SubclassedReader extends Reader {}
+
+        expect(stream).to.be.instanceOf(ReadableStream);
+        expect(new SubclassedStrategy({ highWaterMark: 4 }).highWaterMark).to.equal(4);
+
+        const secondStream = new ReadableStream({
+            start(controller) {
+                controller.enqueue("second");
+                controller.close();
+            }
+        });
+        const reader = new SubclassedReader(secondStream);
+        expect(await reader.read()).to.deep.equal({ value: "second", done: false });
+    });
+
+    // Ported from Chromium's http/tests/streams/chromium/transform-stream-enqueue.html.
+    it("rejects enqueues after a transform is terminated or errored", function () {
+        expect(() => new TransformStream({
+            start(controller) {
+                controller.terminate();
+                controller.enqueue("late");
+            }
+        })).to.throw(TypeError);
+
+        expect(() => new TransformStream({
+            start(controller) {
+                controller.error(new Error("failed"));
+                controller.enqueue("late");
+            }
+        })).to.throw(TypeError);
     });
 });
 
