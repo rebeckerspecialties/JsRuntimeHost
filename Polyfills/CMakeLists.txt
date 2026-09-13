@@ -48,4 +48,8 @@ endif()
 
 if(JSRUNTIMEHOST_POLYFILL_STREAMS)
     add_subdirectory(Streams)
+if(JSRUNTIMEHOST_POLYFILL_COMPRESSION
+    if(NOT JSRUNTIMEHOST_POLYFILL_STREAMS
+        message(FATAL_ERROR "The Compression polyfill requires the Streams polyfill."
+    add_subdirectory(Compression
 endif()

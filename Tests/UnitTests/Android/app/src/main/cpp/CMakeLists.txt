@@ -101,6 +101,7 @@ set(JSR_NODE_API_HARNESS_ENGINES V8 JavaScriptCore)
 if(NAPI_JAVASCRIPT_ENGINE IN_LIST JSR_NODE_API_HARNESS_ENGINES)
     target_compile_definitions(UnitTestsJNI PRIVATE
         NODE_API_AVAILABLE_NATIVE_TESTS="2_function_arguments,3_callbacks,4_object_factory,5_function_factory,test_reference_double_free,test_instance_data,test_bigint")
+    PRIVATE Compression
 endif()
 
 # The conformance addons are built as standalone SHARED lib<name>.so by Tests/NodeApi/CMakeLists.txt,
