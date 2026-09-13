@@ -41,6 +41,10 @@
 #include "../../NodeApi/test_main.h"
 #endif
 
+#if defined(JSRUNTIMEHOST_NAPI_ENGINE_V8)
+#include <napi/env.h>
+#endif
+
 namespace
 {
 #if defined(__ANDROID__) && defined(NODE_API_AVAILABLE_NATIVE_TESTS)
@@ -649,6 +653,93 @@ TEST(NodeApi, DetachArrayBufferOrReportsUnsupported)
     {
         EXPECT_EQ("ENOTSUP", observed.code);
     }
+}
+#endif
+
+#if defined(JSRUNTIMEHOST_NAPI_ENGINE_V8)
+TEST(AppRuntime, V8FinalizersDrainAfterDispatch)
+{
+    constexpr size_t ExternalCount{32};
+    std::atomic<size_t> finalized{};
+    std::promise<void> created;
+    std::promise<void> collectionRequested;
+    std::promise<size_t> observed;
+
+    Babylon::AppRuntime runtime{};
+    runtime.Dispatch([&finalized, &created](Napi::Env env) {
+        for (size_t index{}; index < ExternalCount; ++index)
+        {
+            Napi::External<std::atomic<size_t>>::New(
+                env,
+                &finalized,
+                [](Napi::Env, std::atomic<size_t>* count) {
+                    count->fetch_add(1, std::memory_order_relaxed);
+                });
+        }
+        created.set_value();
+    });
+    created.get_future().wait();
+
+    runtime.Dispatch([&collectionRequested](Napi::Env env) {
+        Napi::GetContext(env)->GetIsolate()->LowMemoryNotification();
+        collectionRequested.set_value();
+    });
+    collectionRequested.get_future().wait();
+
+    runtime.Dispatch([&finalized, &observed](Napi::Env) {
+        observed.set_value(finalized.load(std::memory_order_relaxed));
+    });
+
+    EXPECT_EQ(observed.get_future().get(), ExternalCount);
+}
+
+TEST(AppRuntime, V8FinalizerDrainYieldsBetweenDispatcherTurns)
+{
+    constexpr size_t ExternalCount{16};
+    std::atomic<size_t> finalized{};
+    std::promise<void> created;
+    std::promise<void> collectionRequested;
+
+    Babylon::AppRuntime runtime{};
+    runtime.Dispatch([&](Napi::Env env) {
+        for (size_t index{}; index < ExternalCount; ++index)
+        {
+            Napi::External<std::atomic<size_t>>::New(
+                env,
+                &finalized,
+                [](Napi::Env, std::atomic<size_t>* count) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds{2});
+                    count->fetch_add(1, std::memory_order_relaxed);
+                });
+        }
+        created.set_value();
+    });
+    created.get_future().wait();
+
+    runtime.Dispatch([&](Napi::Env env) {
+        Napi::GetContext(env)->GetIsolate()->LowMemoryNotification();
+        collectionRequested.set_value();
+    });
+    collectionRequested.get_future().wait();
+
+    const auto observeFinalized = [&]() {
+        std::promise<size_t> observed;
+        auto future = observed.get_future();
+        runtime.Dispatch([&](Napi::Env) {
+            observed.set_value(finalized.load(std::memory_order_relaxed));
+        });
+        return future.get();
+    };
+
+    auto observed = observeFinalized();
+    EXPECT_GT(observed, 0u);
+    EXPECT_LT(observed, ExternalCount);
+
+    for (size_t turn{}; turn < ExternalCount && observed < ExternalCount; ++turn)
+    {
+        observed = observeFinalized();
+    }
+    EXPECT_EQ(observed, ExternalCount);
 }
 #endif
 
