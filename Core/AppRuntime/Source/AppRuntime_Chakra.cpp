@@ -72,10 +72,18 @@ namespace Babylon
         Napi::Detach(env);
     }
 
+    void AppRuntime::ShutdownEnvironment(Napi::Env)
+    {
+    }
+
     void AppRuntime::DrainMicrotasks(Napi::Env)
     {
         // Chakra drains promise continuations through its
         // JsSetPromiseContinuationCallback hook (see RunEnvironmentTier).
         // No explicit pump needed here.
+    }
+
+    void AppRuntime::DrainPostDispatchWork(Napi::Env)
+    {
     }
 }

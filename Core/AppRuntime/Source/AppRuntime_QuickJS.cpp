@@ -51,6 +51,10 @@ namespace Babylon
         JS_FreeRuntime(runtime);
     }
 
+    void AppRuntime::ShutdownEnvironment(Napi::Env)
+    {
+    }
+
     void AppRuntime::DrainMicrotasks(Napi::Env env)
     {
         // QuickJS does not auto-drain its job queue. Promise continuations,
@@ -63,5 +67,9 @@ namespace Babylon
         while (JS_ExecutePendingJob(runtime, &pending_ctx) > 0)
         {
         }
+    }
+
+    void AppRuntime::DrainPostDispatchWork(Napi::Env)
+    {
     }
 }

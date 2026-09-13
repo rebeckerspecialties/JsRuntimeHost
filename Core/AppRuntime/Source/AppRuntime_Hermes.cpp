@@ -16,6 +16,10 @@ namespace Babylon
         Napi::Detach(env);
     }
 
+    void AppRuntime::ShutdownEnvironment(Napi::Env)
+    {
+    }
+
     void AppRuntime::DrainMicrotasks(Napi::Env env)
     {
         // Hermes does not auto-drain its job queue.  Promise continuations,
@@ -24,5 +28,9 @@ namespace Babylon
         // code (Promises, Mocha's async tests, polyfill schedulers, etc.)
         // observes the same "between turns" semantics it gets on V8/Chakra.
         Napi::DrainJobs(env);
+    }
+
+    void AppRuntime::DrainPostDispatchWork(Napi::Env)
+    {
     }
 }
