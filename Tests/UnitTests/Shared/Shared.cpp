@@ -1701,6 +1701,9 @@ TEST(NodeApi, AdjacentEscapableScopesEscapeIndependently)
 
 #endif
 
+// The V8JSI shim surfaces a script `throw` of a primitive as a jsi::JSError rather than a
+// Napi::Error, which AppRuntime's dispatch treats as fatal, so this case cannot run there.
+#if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 TEST(NodeApi, PrimitiveExceptionSurvivesNativeCatch)
 {
     // Regression: a JavaScript `throw` of a non-object reaches node-addon-api's
@@ -1739,6 +1742,7 @@ TEST(NodeApi, PrimitiveExceptionSurvivesNativeCatch)
     EXPECT_TRUE(caught.get_future().get());
     EXPECT_TRUE(runtimeStillWorks.get_future().get());
 }
+#endif
 
 #if defined(JSRUNTIMEHOST_NAPI_ENGINE_JAVASCRIPTCORE)
 TEST(NodeApi, PropertyAccessCoercesPrimitiveReceiver)
