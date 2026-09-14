@@ -2,16 +2,26 @@
 #
 # These suppress data races internal to third-party libraries that we cannot fix.
 # TSan on macOS (JavaScriptCore via Xcode) passes clean — these suppressions are
-# only needed for the Ubuntu JSC build (libjavascriptcoregtk).
+# only needed for the Ubuntu Bun JSC build.
 
-# JavaScriptCore internal races in libjavascriptcoregtk.
-# Races manifest in TSan interceptors (free/malloc/memcpy/close) called from
-# JSC's JIT worker threads. function-name suppressions are needed because the
-# top frame is a libc interceptor attributed to UnitTests, not libjavascriptcoregtk.
-called_from_lib:libjavascriptcoregtk
+# Bun's Linux JavaScriptCore is statically linked into the final executable, so
+# a called_from_lib suppression cannot identify it. Match the interceptor frames
+# previously observed on JSC's JIT worker threads instead.
+# Races manifest in TSan interceptors (free/memcpy/close) called from
+# JSC's JIT worker threads.
 race:free
 race:close
 race:memcpy
 
 # JSC signal handler that doesn't save/restore errno
-signal:libjavascriptcoregtk
+signal:WTF::jscSignalHandler
+
+# Bun's WTF (statically linked): the thread suspend/resume handler used by the conservative
+# stack scan does not preserve errno (TSan's "signal handler spoils errno"), and the
+# ref-counted thread bootstrap/parking structures destroy their mutex or condition variable
+# right after the other side's final use, which TSan reports as a race on
+# pthread_mutex_destroy / pthread_cond_destroy. Both show up once several runtimes (workers)
+# start and stop in one process.
+signal:WTF::Thread::signalHandlerSuspendResume
+race:WTF::Thread::NewThreadContext::~NewThreadContext
+race:ThreadData::~ThreadData
