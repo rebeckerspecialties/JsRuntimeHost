@@ -36,7 +36,9 @@ jobs:
     # Bun's JSC requires GLIBCXX_3.4.30. Building on 22.04 preserves that practical
     # runtime floor instead of accidentally importing newer glibc symbols.
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    # ThreadSanitizer symbolizes every report before it can match a suppression, and with Workers
+    # JavaScriptCore's signal-based thread suspension alone produces ~14k of them per run.
+    timeout-minutes: ${{ inputs.enable-thread-sanitizer && 75 || 30 }}
     env:
       CC: ${{ inputs.cc }}
       CXX: ${{ inputs.cxx }}
