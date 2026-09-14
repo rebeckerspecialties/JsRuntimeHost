@@ -99,7 +99,12 @@ struct napi_env__ {
     JSGlobalContextRelease(context);
     {
       std::lock_guard lock{napi_envs_mutex};
-      napi_envs.erase(context);
+      // Erase only our own registration: JavaScriptCore can hand a new environment the address of
+      // a context released just before this destructor runs (worker create/terminate churn), and
+      // an unconditional erase would then orphan that newer environment (ToNapi -> nullptr).
+      if (const auto it = napi_envs.find(context); it != napi_envs.end() && it->second == this) {
+        napi_envs.erase(it);
+      }
     }
   }
 
