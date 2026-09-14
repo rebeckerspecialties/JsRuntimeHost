@@ -2533,6 +2533,7 @@ napi_status napi_get_value_string_utf16(napi_env env,
 napi_status napi_coerce_to_bool(napi_env env,
                                 napi_value value,
                                 napi_value* result) {
+  CHECK_ENV(env);
   CHECK_ARG(env, result);
   *result = ToNapi(JSValueMakeBoolean(env->context,
     JSValueToBoolean(env->context, ToJSValue(value))));
