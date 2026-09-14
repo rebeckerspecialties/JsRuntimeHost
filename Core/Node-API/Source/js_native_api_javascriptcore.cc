@@ -2685,7 +2685,11 @@ napi_status napi_create_reference(napi_env env,
     return napi_set_last_error(env, napi_generic_failure);
   }
 
-  ref->init(env, value, initial_refcount);
+  const napi_status status{ref->init(env, value, initial_refcount)};
+  if (status != napi_ok) {
+    delete ref;
+    return status;
+  }
   *result = ref;
 
   return napi_ok;
