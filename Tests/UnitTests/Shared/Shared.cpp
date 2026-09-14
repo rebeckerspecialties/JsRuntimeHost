@@ -1682,7 +1682,9 @@ TEST(NodeApi, PrimitiveExceptionSurvivesNativeCatch)
         bool sawError{false};
         try
         {
-            env.RunScript("throw 'plain text';");
+            // Napi::Eval rather than Env::RunScript: the JSI shim has no RunScript and
+            // Hermes only implements the 3-argument napi_run_script.
+            Napi::Eval(env, "throw 'plain text';", "primitive-exception.js");
         }
         catch (const Napi::Error& error)
         {
@@ -1693,7 +1695,7 @@ TEST(NodeApi, PrimitiveExceptionSurvivesNativeCatch)
         }
         caught.set_value(sawError);
 
-        const auto sum = env.RunScript("1 + 1");
+        const auto sum = Napi::Eval(env, "1 + 1", "primitive-exception.js");
         runtimeStillWorks.set_value(sum.IsNumber() && sum.As<Napi::Number>().Int32Value() == 2);
     });
 
