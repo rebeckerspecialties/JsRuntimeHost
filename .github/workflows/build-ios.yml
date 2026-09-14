@@ -50,7 +50,14 @@ jobs:
       - name: Collect crash reports
         if: failure()
         run: |
-          for report in $(ls -t ~/Library/Logs/DiagnosticReports/UnitTests-*.ips 2>/dev/null | head -n 3); do
+          # ReportCrash writes the .ips a moment after the process dies; the unified log has the
+          # crash summary (and the app's last stderr) even when no report file appears.
+          sleep 10
+          xcrun simctl spawn booted log show --last 10m --style compact \
+            --predicate 'process == "UnitTests" OR process == "ReportCrash" OR eventMessage CONTAINS "UnitTests"' \
+            2>/dev/null | tail -n 200 || true
+          ls -lt ~/Library/Logs/DiagnosticReports 2>/dev/null | head -n 10 || true
+          for report in $(ls -t ~/Library/Logs/DiagnosticReports/UnitTests*.ips 2>/dev/null | head -n 3); do
             echo "::group::$report"
             python3 - "$report" <<'EOF'
           import json, sys
