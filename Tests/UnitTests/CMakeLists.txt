@@ -78,6 +78,8 @@ target_link_libraries(UnitTests
     PRIVATE Performance
     PRIVATE TextDecoder
     PRIVATE TextEncoder
+    PRIVATE Streams
+    PRIVATE Compression
     ${ADDITIONAL_LIBRARIES})
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543

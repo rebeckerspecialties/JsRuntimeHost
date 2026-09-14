@@ -55,4 +55,6 @@ target_link_libraries(UnitTestsJNI
     PRIVATE File
     PRIVATE TextDecoder
     PRIVATE TextEncoder
-    PRIVATE Performance)
+    PRIVATE Performance
+    PRIVATE Streams
+    PRIVATE Compression)
