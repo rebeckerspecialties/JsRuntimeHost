@@ -1714,6 +1714,36 @@ TEST(NodeApi, AdjacentEscapableScopesEscapeIndependently)
 // Napi::Error, which AppRuntime's dispatch treats as fatal, so this case cannot run there.
 #if !defined(JSRUNTIMEHOST_NAPI_ENGINE_JSI)
 TEST(NodeApi, PrimitiveExceptionSurvivesNativeCatch)
+TEST(NodeApi, EvalThrowIsCatchable)
+{
+    // Regression: a script exception has to reach native callers as Napi::Error on every engine.
+    // The JSI shim let facebook::jsi::JSError escape from Napi::Eval, which AppRuntime's dispatch
+    // treats as fatal (std::abort). A thrown primitive takes the same path there; it is covered by
+    // NodeApi.PrimitiveExceptionSurvivesNativeCatch (#239), which cannot run on JavaScriptCore
+    // before that change lands.
+    Babylon::AppRuntime runtime{};
+
+    std::promise<bool> outcome;
+    runtime.Dispatch([&outcome](Napi::Env env) {
+        bool caught{false};
+        std::string message;
+        try
+        {
+            Napi::Eval(env, "throw new Error('boom');", "eval-throw.js");
+        }
+        catch (const Napi::Error& error)
+        {
+            caught = true;
+            message = error.Message();
+        }
+        const auto sum = Napi::Eval(env, "1 + 1", "eval-throw.js");
+        outcome.set_value(caught && message == "boom" && sum.IsNumber() && sum.As<Napi::Number>().Int32Value() == 2);
+    });
+
+    EXPECT_TRUE(outcome.get_future().get());
+}
+
+int RunTests()
 {
     // Regression: a JavaScript `throw` of a non-object reaches node-addon-api's
     // Napi::Error, which wraps the pending exception with napi_create_reference.
