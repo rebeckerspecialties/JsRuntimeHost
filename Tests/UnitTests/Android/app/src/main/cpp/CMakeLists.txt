@@ -37,6 +37,7 @@ add_library(UnitTestsJNI SHARED
     ${UNIT_TESTS_DIR}/Shared/TimeoutDispatcher.cpp
     ${UNIT_TESTS_DIR}/Shared/Shared.h
     ${UNIT_TESTS_DIR}/Shared/Shared.cpp
+    ${UNIT_TESTS_DIR}/Shared/TestHttpServer.cpp
     ${TESTS_DIR}/NodeApi/node_lite.cpp
     ${NODE_LITE_PLATFORM_SRC}
     ${NODE_LITE_CHILD_PROCESS_SRC}
