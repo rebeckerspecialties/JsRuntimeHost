@@ -163,7 +163,7 @@ endif()
 FetchContent_MakeAvailable_With_Message(arcana.cpp)
 set_property(TARGET arcana PROPERTY FOLDER Dependencies)
 
-if(ANDROID)
+if(ANDROID AND NOT TARGET AndroidExtensions)
     FetchContent_GetProperties(AndroidExtensions)
     if(NOT AndroidExtensions_POPULATED)
         FetchContent_Populate(AndroidExtensions)
