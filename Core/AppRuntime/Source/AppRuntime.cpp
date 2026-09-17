@@ -6,11 +6,15 @@
 #include <arcana/threading/dispatcher.h>
 
 #include <cassert>
+#include <cstring>
 #include <cstdlib>
 #include <atomic>
 #include <optional>
 #include <mutex>
 #include <thread>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#endif
 #include <type_traits>
 
 namespace Babylon
@@ -56,6 +60,21 @@ namespace Babylon
         , m_impl{std::make_unique<Impl>()}
     {
         m_impl->m_thread = std::thread{[this] {
+#if defined(__APPLE__)
+            // Diagnostic: JSRUNTIMEHOST_APPRUNTIME_QOS=background|utility runs the JavaScript thread
+            // at that QoS class, which on Apple silicon schedules it on the efficiency cores while the
+            // host's frame timer keeps its own QoS (a process-wide clamp would throttle that too).
+            if (const char* qos = std::getenv("JSRUNTIMEHOST_APPRUNTIME_QOS"))
+            {
+                const qos_class_t qosClass = std::strcmp(qos, "background") == 0 ? QOS_CLASS_BACKGROUND
+                    : std::strcmp(qos, "utility") == 0 ? QOS_CLASS_UTILITY
+                    : QOS_CLASS_UNSPECIFIED;
+                if (qosClass != QOS_CLASS_UNSPECIFIED)
+                {
+                    pthread_set_qos_class_self_np(qosClass, 0);
+                }
+            }
+#endif
             RunPlatformTier();
             if (m_options.ThreadExitHandler)
             {
