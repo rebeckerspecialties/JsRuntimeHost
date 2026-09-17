@@ -1,6 +1,7 @@
 #include "Shared.h"
 #include "TestHttpServer.h"
 #include <Babylon/AppRuntime.h>
+#include <Babylon/JsRuntimeScheduler.h>
 #include <Babylon/ScriptLoader.h>
 #include <Babylon/Polyfills/AbortController.h>
 #include <Babylon/Polyfills/Console.h>
@@ -816,6 +817,67 @@ TEST(AppRuntime, DestroyDoesNotDeadlock)
     }
 
     testThread.join();
+}
+
+TEST(AppRuntime, SchedulerCanOutliveRuntime)
+{
+    std::optional<Babylon::JsRuntimeScheduler> scheduler;
+    std::promise<void> ready;
+
+    {
+        Babylon::AppRuntime runtime{};
+        runtime.Dispatch([&](Napi::Env env) {
+            scheduler.emplace(Babylon::JsRuntime::GetFromJavaScript(env));
+            ready.set_value();
+        });
+        ready.get_future().wait();
+    }
+
+    bool called{};
+    (*scheduler)([&called] {
+        called = true;
+    });
+    EXPECT_FALSE(called);
+}
+
+TEST(AppRuntime, SchedulerDispatchCanRaceRuntimeTeardown)
+{
+    auto runtime = std::make_unique<Babylon::AppRuntime>();
+    std::optional<Babylon::JsRuntimeScheduler> scheduler;
+    std::promise<void> ready;
+    runtime->Dispatch([&](Napi::Env env) {
+        scheduler.emplace(Babylon::JsRuntime::GetFromJavaScript(env));
+        ready.set_value();
+    });
+    ready.get_future().wait();
+
+    std::atomic<bool> stop{};
+    std::atomic<size_t> attempts{};
+    std::atomic<size_t> called{};
+    std::thread dispatchThread{[&] {
+        while (!stop.load(std::memory_order_acquire))
+        {
+            (*scheduler)([&called] {
+                called.fetch_add(1, std::memory_order_relaxed);
+            });
+            attempts.fetch_add(1, std::memory_order_release);
+            std::this_thread::yield();
+        }
+    }};
+
+    while (attempts.load(std::memory_order_acquire) < 100)
+    {
+        std::this_thread::yield();
+    }
+    runtime.reset();
+    stop.store(true, std::memory_order_release);
+    dispatchThread.join();
+
+    const auto countAfterTeardown = called.load(std::memory_order_relaxed);
+    (*scheduler)([&called] {
+        called.fetch_add(1, std::memory_order_relaxed);
+    });
+    EXPECT_EQ(called.load(std::memory_order_relaxed), countAfterTeardown);
 }
 
 // N-API results must not depend on anything reachable from script. The JavaScriptCore backend has no

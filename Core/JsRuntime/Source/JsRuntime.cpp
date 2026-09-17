@@ -1,8 +1,21 @@
 #include "JsRuntime.h"
 #include "Babylon/DebugTrace.h"
 
+#include <mutex>
+
 namespace Babylon
 {
+    struct JsRuntime::InternalState
+    {
+        explicit InternalState(DispatchFunctionT dispatchFunction)
+            : DispatchFunction{std::move(dispatchFunction)}
+        {
+        }
+
+        DispatchFunctionT DispatchFunction;
+        std::mutex Mutex;
+    };
+
     namespace
     {
         static constexpr auto JS_RUNTIME_NAME = "runtime";
@@ -10,7 +23,7 @@ namespace Babylon
     }
 
     JsRuntime::JsRuntime(Napi::Env env, DispatchFunctionT dispatchFunction)
-        : m_dispatchFunction{std::move(dispatchFunction)}
+        : m_state{std::make_shared<InternalState>(std::move(dispatchFunction))}
     {
         auto global = env.Global();
 
@@ -26,6 +39,12 @@ namespace Babylon
         jsNative.Set(JS_RUNTIME_NAME, jsRuntime);
 
         DEBUG_TRACE("JsRuntime created");
+    }
+
+    JsRuntime::~JsRuntime()
+    {
+        std::scoped_lock lock{m_state->Mutex};
+        m_state->DispatchFunction = {};
     }
 
     JsRuntime& BABYLON_API JsRuntime::CreateForJavaScript(Napi::Env env, DispatchFunctionT dispatchFunction)
@@ -45,8 +64,18 @@ namespace Babylon
 
     void JsRuntime::Dispatch(std::function<void BABYLON_API (Napi::Env)> function)
     {
-        std::scoped_lock lock{m_mutex};
-        m_dispatchFunction([function = std::move(function)](Napi::Env env) {
+        Dispatch(m_state, std::move(function));
+    }
+
+    void JsRuntime::Dispatch(const std::shared_ptr<InternalState>& state, std::function<void BABYLON_API (Napi::Env)> function)
+    {
+        std::scoped_lock lock{state->Mutex};
+        if (!state->DispatchFunction)
+        {
+            return;
+        }
+
+        state->DispatchFunction([function = std::move(function)](Napi::Env env) {
             function(env);
 
             // The environment will be in a pending exceptional state if

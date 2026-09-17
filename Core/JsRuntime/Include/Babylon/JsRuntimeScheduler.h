@@ -12,19 +12,19 @@ namespace Babylon
     {
     public:
         explicit JsRuntimeScheduler(JsRuntime& runtime)
-            : m_runtime{runtime}
+            : m_runtimeState{runtime.m_state}
         {
         }
 
         template<typename CallableT>
         void operator()(CallableT&& callable) const
         {
-            m_runtime.Dispatch([callable{std::forward<CallableT>(callable)}](Napi::Env) {
+            JsRuntime::Dispatch(m_runtimeState, [callable{std::forward<CallableT>(callable)}](Napi::Env) {
                 callable();
             });
         }
 
     private:
-        JsRuntime& m_runtime;
+        std::shared_ptr<JsRuntime::InternalState> m_runtimeState;
     };
 }
