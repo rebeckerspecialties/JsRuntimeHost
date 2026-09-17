@@ -10,6 +10,7 @@ namespace Babylon
     /**
      * Scheduler that invokes continuations via JsRuntime::Dispatch.
      * Intended to be consumed by arcana.cpp tasks.
+     * Copies can outlive the runtime; dispatch after shutdown is discarded.
      */
     class JsRuntimeScheduler
     {
@@ -23,13 +24,18 @@ namespace Babylon
         void operator()(CallableT&& callable) const
         {
             JsRuntime::Dispatch(m_runtimeState, [callable{std::forward<CallableT>(callable)}](Napi::Env env) mutable {
-                if constexpr (std::is_invocable_v<decltype(callable)&, Napi::Env>)
+                // Preserve the original const, zero-argument invocation when available.
+                if constexpr (std::is_invocable_v<const decltype(callable)&>)
                 {
-                    callable(env);
+                    std::as_const(callable)();
+                }
+                else if constexpr (std::is_invocable_v<decltype(callable)&>)
+                {
+                    callable();
                 }
                 else
                 {
-                    callable();
+                    callable(env);
                 }
             });
         }

@@ -47,12 +47,14 @@ namespace Babylon
         JsRuntime& operator=(const JsRuntime&) = delete;
 
     private:
+        friend class AppRuntime;
         friend class JsRuntimeScheduler;
 
         JsRuntime(Napi::Env, DispatchFunctionT);
         ~JsRuntime();
 
         static void Dispatch(const std::shared_ptr<InternalState>&, std::function<void BABYLON_API (Napi::Env)>);
+        static void Close(const std::shared_ptr<InternalState>&);
 
         std::shared_ptr<InternalState> m_state;
     };
