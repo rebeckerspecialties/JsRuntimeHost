@@ -5,7 +5,7 @@
 int main(int argc, char** argv)
 {
     Babylon::DebugTrace::EnableDebugTrace(true);
-    Babylon::DebugTrace::SetTraceOutput([](const char* trace) { NSLog(@"%@", trace); });
+    Babylon::DebugTrace::SetTraceOutput([](const char* trace) { NSLog(@"%s", trace); });
 
     return RunTests(argc, argv);
 }
