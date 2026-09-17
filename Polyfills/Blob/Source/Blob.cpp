@@ -200,6 +200,10 @@ namespace Babylon::Polyfills::Internal
             env.Global().Get("Object").As<Napi::Object>().Get("defineProperty").As<Napi::Function>().Call(
                 env.Global().Get("Object"),
                 {func, Napi::String::New(env, "__jsRuntimeHostBlobStreamSource"), sourceDescriptor});
+            // TryGetData identifies our instances through this reference, so a script that later
+            // replaces the global `Blob` (a test shim, another polyfill) cannot make a foreign object
+            // look like one of ours.
+            JsRuntime::NativeObject::GetFromJavaScript(env).Set(JS_BLOB_CONSTRUCTOR_NAME, func);
             env.Global().Set(JS_BLOB_CONSTRUCTOR_NAME, func);
         }
     }
@@ -649,7 +653,9 @@ namespace Babylon::Polyfills::Blob
         // This keeps the check portable across QuickJS, V8, JavaScriptCore, Chakra and JSI, and it
         // also accepts Blob subclasses (e.g. File). We deliberately avoid napi_instanceof, whose
         // node-addon-api wrapper requires a Napi::Function.
-        const auto blobConstructor = global.Get("Blob");
+        // Our constructor is the one registered at Initialize, not the global `Blob` binding: a
+        // script may have replaced that with its own class whose instances wrap nothing.
+        const auto blobConstructor = JsRuntime::NativeObject::GetFromJavaScript(env).Get("Blob");
         if (!blobConstructor.IsFunction())
         {
             return std::nullopt;
@@ -693,6 +699,10 @@ namespace Babylon::Polyfills::Blob
         }
 
         const auto* blob = Internal::Blob::Unwrap(object);
+        if (blob == nullptr)
+        {
+            return std::nullopt;
+        }
         return BlobData{blob->Data(), blob->Type()};
     }
 }
