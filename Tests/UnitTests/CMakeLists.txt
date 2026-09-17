@@ -9,10 +9,13 @@ file(GLOB ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/Assets/*")
 
 set(SOURCES
     "Shared/DelayedTaskScheduler.cpp"
+    "Shared/JsRuntimeScheduler.cpp"
     "Shared/StandardStreamLogger.cpp"
     "Shared/TimeoutDispatcher.cpp"
     "Shared/Shared.cpp"
-    "Shared/Shared.h")
+    "Shared/Shared.h"
+    "Shared/TestHttpServer.cpp"
+    "Shared/TestHttpServer.h")
 
 if(APPLE)
     if(IOS)
@@ -58,6 +61,22 @@ target_compile_definitions(UnitTests PRIVATE NAPI_JAVASCRIPT_ENGINE="${NAPI_JAVA
 # CreateDataViewRejectsOverflowingRange test is compiled out on that backend.
 if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JSI)
+    target_sources(UnitTests PRIVATE "Shared/JsiEval.cpp")
+    target_include_directories(UnitTests PRIVATE "${JsRuntimeHost_SOURCE_DIR}/Core/Node-API-JSI/Source")
+endif()
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_V8)
+endif()
+
+if(APPLE AND NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_APPLE_JAVASCRIPTCORE)
+endif()
+
+# The JavaScriptCore backend follows Node's ToObject coercion of property receivers and its
+# reference rules for primitives; other engines diverge (Chakra references any value, some reject
+# a primitive receiver outright), so the tests that pin those semantics build for it only.
+if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore")
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JAVASCRIPTCORE)
 endif()
 
 target_link_libraries(UnitTests
@@ -78,12 +97,33 @@ target_link_libraries(UnitTests
     PRIVATE Performance
     PRIVATE TextDecoder
     PRIVATE TextEncoder
+    PRIVATE Streams
+    PRIVATE Compression
+    PRIVATE IndexedDB
     ${ADDITIONAL_LIBRARIES})
+
+if(TARGET Worker)
+    target_link_libraries(UnitTests PRIVATE Worker)
+    target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_TEST_WORKER=1)
+endif()
 
 # See https://gitlab.kitware.com/cmake/cmake/-/issues/23543
 # If we can set minimum required to 3.26+, then we can use the `copy -t` syntax instead.
 add_custom_command(TARGET UnitTests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E $<IF:$<BOOL:$<TARGET_RUNTIME_DLLS:UnitTests>>,copy,true> $<TARGET_RUNTIME_DLLS:UnitTests> $<TARGET_FILE_DIR:UnitTests> COMMAND_EXPAND_LISTS)
+
+if(TARGET Worker)
+    add_custom_command(TARGET UnitTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests"
+            "$<TARGET_FILE_DIR:UnitTests>/WebPlatformTests"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:UnitTests>/workers/support"
+        COMMAND ${CMAKE_COMMAND} -E copy
+            "${CMAKE_CURRENT_SOURCE_DIR}/WebPlatformTests/workers/support/visualization-worker-cache.json"
+            "$<TARGET_FILE_DIR:UnitTests>/workers/support/visualization-worker-cache.json"
+        COMMENT "Copying focused Worker conformance regressions")
+endif()
 
 if(APPLE)
     enable_objc_arc(UnitTests)
