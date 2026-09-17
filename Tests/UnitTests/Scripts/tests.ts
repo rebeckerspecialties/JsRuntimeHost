@@ -1852,6 +1852,28 @@ describe("TextDecoder", function () {
         expect(result).to.equal("\u{1F600}\0A");
         expect(result.length).to.equal(4);
     });
+
+    it("should replace a trailing odd UTF-16 byte with U+FFFD", function () {
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x48, 0x00, 0x00]))).to.equal("H\uFFFD");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0x00, 0x48, 0x00]))).to.equal("H\uFFFD");
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x00]))).to.equal("\uFFFD");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0x00]))).to.equal("\uFFFD");
+    });
+
+    it("should replace unpaired UTF-16 surrogates with U+FFFD", function () {
+        // Lone lead U+D800.
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x00, 0xD8]))).to.equal("\uFFFD");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0xD8, 0x00]))).to.equal("\uFFFD");
+        // Lone trail U+DC00.
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x00, 0xDC]))).to.equal("\uFFFD");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0xDC, 0x00]))).to.equal("\uFFFD");
+        // Lead followed by BMP 'A': replacement, then reprocess 'A'.
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x00, 0xD8, 0x41, 0x00]))).to.equal("\uFFFDA");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0xD8, 0x00, 0x00, 0x41]))).to.equal("\uFFFDA");
+        // Unpaired lead plus leftover odd byte is a single end-of-queue replacement.
+        expect(new TextDecoder("utf-16le").decode(new Uint8Array([0x00, 0xD8, 0x00]))).to.equal("\uFFFD");
+        expect(new TextDecoder("utf-16be").decode(new Uint8Array([0xD8, 0x00, 0x00]))).to.equal("\uFFFD");
+    });
 });
 
 describe("TextEncoder", function () {
@@ -2214,6 +2236,105 @@ describe("FileReader", function () {
             }
         };
         reader.readAsText(blob);
+    });
+
+    it("skips a listener removed during dispatch and still calls the final listener", function (done) {
+        const reader = new FileReader();
+        const blob = new Blob(["abc"]);
+        const calls: string[] = [];
+        let laterListener: (() => void) | null = function () {
+            calls.push("removed");
+        };
+
+        reader.addEventListener("load", function () {
+            calls.push("first");
+            reader.removeEventListener("load", laterListener);
+            laterListener = null;
+
+            // Add allocation pressure for JSC_collectContinuously=1 runs. The assertion
+            // below is deterministic and does not depend on whether collection occurs.
+            const pressure = [];
+            for (let i = 0; i < 64; ++i) {
+                pressure.push(new Uint8Array(16 * 1024));
+            }
+            calls.push(`allocated ${pressure.length}`);
+        });
+        reader.addEventListener("load", laterListener);
+        reader.addEventListener("load", function () {
+            calls.push("last");
+        });
+        reader.onloadend = function () {
+            try {
+                expect(calls).to.deep.equal(["first", "allocated 64", "last"]);
+                done();
+            } catch (e) {
+                done(e);
+            }
+        };
+        reader.readAsText(blob);
+    });
+
+    it("defers a removed and re-added listener until the next dispatch", function () {
+        const reader = new FileReader();
+        const calls: string[] = [];
+        const later = () => calls.push("later");
+        const first = function () {
+            calls.push("first");
+            reader.removeEventListener("load", first);
+            reader.removeEventListener("load", later);
+            reader.addEventListener("load", later);
+        };
+        reader.addEventListener("load", first);
+        reader.addEventListener("load", later);
+        reader.addEventListener("load", () => calls.push("last"));
+
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["first", "last"]);
+        calls.length = 0;
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["last", "later"]);
+    });
+
+    it("allows self-removal and defers newly added listeners", function () {
+        const reader = new FileReader();
+        const calls: string[] = [];
+        const added = () => calls.push("added");
+        const first = function () {
+            calls.push("first");
+            reader.removeEventListener("load", first);
+            reader.addEventListener("load", added);
+        };
+        reader.addEventListener("load", first);
+        reader.addEventListener("load", () => calls.push("last"));
+
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["first", "last"]);
+        calls.length = 0;
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["last", "added"]);
+    });
+
+    it("observes removals made by a nested dispatch", function () {
+        const reader = new FileReader();
+        const calls: string[] = [];
+        const first = function () {
+            calls.push("first");
+            reader.removeEventListener("load", first);
+            reader.dispatchEvent({ type: "load" });
+        };
+        const middle = function () {
+            calls.push("middle");
+            reader.removeEventListener("load", middle);
+        };
+        reader.addEventListener("load", first);
+        reader.addEventListener("load", middle);
+        reader.addEventListener("load", () => calls.push("last"));
+
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["first", "middle", "last", "last"]);
+        calls.length = 0;
+        reader.dispatchEvent({ type: "load" });
+        expect(calls).to.deep.equal(["last"]);
     });
 
     // -------------------------------- abort --------------------------------
