@@ -61,6 +61,7 @@ target_compile_definitions(UnitTests PRIVATE NAPI_JAVASCRIPT_ENGINE="${NAPI_JAVA
 # CreateDataViewRejectsOverflowingRange test is compiled out on that backend.
 if(NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_JSI)
+    target_sources(UnitTests PRIVATE "Shared/JsiEval.cpp")
 endif()
 if(NAPI_JAVASCRIPT_ENGINE STREQUAL "V8")
     target_compile_definitions(UnitTests PRIVATE JSRUNTIMEHOST_NAPI_ENGINE_V8)
