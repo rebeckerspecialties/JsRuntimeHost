@@ -840,6 +840,25 @@ TEST(AppRuntime, SchedulerCanOutliveRuntime)
     EXPECT_FALSE(called);
 }
 
+TEST(AppRuntime, SchedulerCanForwardTheRuntimeEnvironment)
+{
+    Babylon::AppRuntime runtime{};
+    std::promise<void> completed;
+    std::atomic<bool> receivedExpectedEnvironment{};
+
+    runtime.Dispatch([&](Napi::Env env) {
+        Babylon::JsRuntimeScheduler scheduler{Babylon::JsRuntime::GetFromJavaScript(env)};
+        const auto expectedEnvironment = static_cast<napi_env>(env);
+        scheduler([&completed, &receivedExpectedEnvironment, expectedEnvironment](Napi::Env callbackEnv) {
+            receivedExpectedEnvironment = static_cast<napi_env>(callbackEnv) == expectedEnvironment;
+            completed.set_value();
+        });
+    });
+
+    ASSERT_EQ(completed.get_future().wait_for(std::chrono::seconds{5}), std::future_status::ready);
+    EXPECT_TRUE(receivedExpectedEnvironment);
+}
+
 TEST(AppRuntime, SchedulerDispatchCanRaceRuntimeTeardown)
 {
     auto runtime = std::make_unique<Babylon::AppRuntime>();

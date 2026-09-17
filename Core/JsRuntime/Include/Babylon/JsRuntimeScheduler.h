@@ -2,6 +2,9 @@
 
 #include "JsRuntime.h"
 
+#include <type_traits>
+#include <utility>
+
 namespace Babylon
 {
     /**
@@ -19,8 +22,15 @@ namespace Babylon
         template<typename CallableT>
         void operator()(CallableT&& callable) const
         {
-            JsRuntime::Dispatch(m_runtimeState, [callable{std::forward<CallableT>(callable)}](Napi::Env) {
-                callable();
+            JsRuntime::Dispatch(m_runtimeState, [callable{std::forward<CallableT>(callable)}](Napi::Env env) mutable {
+                if constexpr (std::is_invocable_v<decltype(callable)&, Napi::Env>)
+                {
+                    callable(env);
+                }
+                else
+                {
+                    callable();
+                }
             });
         }
 
