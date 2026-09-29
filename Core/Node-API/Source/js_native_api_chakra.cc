@@ -1,8 +1,12 @@
 #include "js_native_api_chakra.h"
+#include "js_native_api_shared.h"
 #include <napi/js_native_api.h>
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstring>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <string>
@@ -48,13 +52,14 @@ JsErrorCode JsCopyStringUtf16(_In_ JsValueRef value, _Out_opt_ char16_t* buffer,
   size_t stringLength;
   CHECK_JSRT_ERROR_CODE(JsStringToPointer(value, &stringValue, &stringLength));
 
+  const size_t copied = buffer == nullptr ? stringLength : std::min(bufferSize, stringLength);
   if (length != nullptr) {
-    *length = stringLength;
+    *length = copied;
   }
 
-  if (buffer != nullptr) {
+  if (buffer != nullptr && copied != 0) {
     static_assert(sizeof(char16_t) == sizeof(wchar_t));
-    memcpy_s(buffer, bufferSize, stringValue, stringLength * sizeof(wchar_t));
+    std::memcpy(buffer, stringValue, copied * sizeof(char16_t));
   }
 
   return JsErrorCode::JsNoError;
@@ -509,6 +514,12 @@ napi_status DefineProperty(napi_env env,
 
 } // end anonymous namespace
 
+void napi_chakra_internal::DiscardReferenceAfterRuntimeDisposal(napi_ref ref)
+{
+  // The runtime has freed its JS values; JsRelease would access invalid handles.
+  delete reinterpret_cast<RefInfo*>(ref);
+}
+
 // Warning: Keep in-sync with napi_status enum
 static const char* error_messages[] = {
   nullptr,
@@ -678,11 +689,22 @@ napi_status napi_get_property_names(napi_env env,
                                     napi_value object,
                                     napi_value* result) {
   CHECK_ENV(env);
+  CHECK_ARG(env, object);
   CHECK_ARG(env, result);
-  JsValueRef obj = reinterpret_cast<JsValueRef>(object);
-  JsValueRef propertyNames;
-  CHECK_JSRT(env, JsGetOwnPropertyNames(obj, &propertyNames));
-  *result = reinterpret_cast<napi_value>(propertyNames);
+
+  // `JsGetOwnPropertyNames` is own-only and includes non-enumerable properties,
+  // so use the shared prototype-chain walk instead. It is written against the
+  // public `napi_*` surface and so cannot reach `napi_set_last_error`; do it
+  // here, since `CHECK_NAPI` only propagates the status and the preceding call
+  // inside the walk will have cleared the last error. The success path likewise
+  // has to clear it, so that a rejection recorded by an earlier call does not
+  // survive as the last error of a call that succeeded.
+  const napi_status status{napi_shared::GetEnumerablePropertyNames(env, object, result, env->property_name_intrinsics)};
+  if (status != napi_ok) {
+    return napi_set_last_error(env, status);
+  }
+
+  napi_clear_last_error(env);
   return napi_ok;
 }
 
@@ -1825,17 +1847,13 @@ napi_status napi_create_reference(napi_env env,
   CHECK_ARG(env, result);
 
   auto jsValue = reinterpret_cast<JsValueRef>(value);
-  auto info = new RefInfo{ reinterpret_cast<JsValueRef>(value), initial_refcount };
-  if (info == nullptr) {
-    return napi_set_last_error(env, napi_generic_failure);
-  }
-
+  std::unique_ptr<RefInfo> info{new RefInfo{jsValue, initial_refcount}};
   if (info->count != 0)
   {
     CHECK_JSRT(env, JsAddRef(jsValue, nullptr));
   }
 
-  *result = reinterpret_cast<napi_ref>(info);
+  *result = reinterpret_cast<napi_ref>(info.release());
   return napi_ok;
 }
 
@@ -2484,6 +2502,119 @@ napi_status napi_run_script(napi_env env,
   CHECK_JSRT_EXPECTED(env, JsRunScript(scriptStr, ++env->source_context, NarrowToWide({ source_url }).data(), reinterpret_cast<JsValueRef*>(result)), napi_string_expected);
 
   return napi_ok;
+}
+
+// === N-API v6 / v7 ===
+//
+// napi_set_instance_data / napi_get_instance_data (v6): per-env data slot, finalized at env teardown
+// by ~napi_env__ (see js_native_api_chakra.h).
+napi_status napi_set_instance_data(napi_env env,
+                                   void* data,
+                                   napi_finalize finalize_cb,
+                                   void* finalize_hint) {
+  CHECK_ENV(env);
+  env->instance_data = data;
+  env->instance_data_finalize_cb = finalize_cb;
+  env->instance_data_finalize_hint = finalize_hint;
+  return napi_ok;
+}
+
+napi_status napi_get_instance_data(napi_env env, void** data) {
+  CHECK_ENV(env);
+  CHECK_ARG(env, data);
+  *data = env->instance_data;
+  return napi_ok;
+}
+
+// N-API v7 ArrayBuffer detach. Win10's OS Chakra exposes no way to detach an ArrayBuffer: the
+// runtime has no detach entry point, and its JavaScript engine predates ES2024
+// ArrayBuffer.prototype.transfer(). As with BigInt below, report that honestly rather than failing
+// with a bare status an addon cannot tell from a real error.
+napi_status napi_detach_arraybuffer(napi_env env, napi_value arraybuffer) {
+  CHECK_ENV(env);
+  CHECK_ARG(env, arraybuffer);
+  CHECK_NAPI(napi_throw_error(
+      env, "ENOTSUP",
+      "ArrayBuffer detach is not supported by the underlying JavaScript engine (Chakra)."));
+  return napi_set_last_error(env, napi_pending_exception);
+}
+
+napi_status napi_is_detached_arraybuffer(napi_env env,
+                                         napi_value arraybuffer,
+                                         bool* result) {
+  CHECK_ENV(env);
+  CHECK_ARG(env, arraybuffer);
+  CHECK_ARG(env, result);
+
+  // Nothing can detach a buffer on this engine (see above), so an ArrayBuffer that still reports
+  // storage is live. Non-ArrayBuffers are not detached either, matching Node's contract.
+  JsValueType valueType;
+  CHECK_JSRT(env, JsGetValueType(reinterpret_cast<JsValueRef>(arraybuffer), &valueType));
+  if (valueType != JsArrayBuffer) {
+    *result = false;
+    return napi_ok;
+  }
+
+  BYTE* storageData;
+  unsigned int storageLength;
+  CHECK_JSRT(env, JsGetArrayBufferStorage(
+    reinterpret_cast<JsValueRef>(arraybuffer),
+    &storageData,
+    &storageLength));
+
+  *result = (storageData == nullptr);
+  return napi_ok;
+}
+
+// BigInt (v6): the Win10 OS edge-mode Chakra (jsrt) predates BigInt and exposes no JsBigInt* API, so
+// there is no value-preserving fallback. Per the Node-API feature-detection-by-exception pattern, throw
+// a JS-catchable error tagged "ENOTSUP" (so JS land can detect + polyfill) and return a pending
+// exception rather than silently failing. (ChakraCore added BigInt behind a flag, but the OS Chakra
+// this backend targets did not ship it.)
+static napi_status napi_bigint_not_supported(napi_env env) {
+  CHECK_ENV(env);
+  CHECK_NAPI(napi_throw_error(
+      env, "ENOTSUP",
+      "BigInt is not supported by the underlying JavaScript engine (Chakra)."));
+  return napi_set_last_error(env, napi_pending_exception);
+}
+
+napi_status napi_create_bigint_int64(napi_env env, int64_t value, napi_value* result) {
+  return napi_bigint_not_supported(env);
+}
+
+napi_status napi_create_bigint_uint64(napi_env env, uint64_t value, napi_value* result) {
+  return napi_bigint_not_supported(env);
+}
+
+napi_status napi_create_bigint_words(napi_env env,
+                                     int sign_bit,
+                                     size_t word_count,
+                                     const uint64_t* words,
+                                     napi_value* result) {
+  return napi_bigint_not_supported(env);
+}
+
+napi_status napi_get_value_bigint_int64(napi_env env,
+                                        napi_value value,
+                                        int64_t* result,
+                                        bool* lossless) {
+  return napi_bigint_not_supported(env);
+}
+
+napi_status napi_get_value_bigint_uint64(napi_env env,
+                                         napi_value value,
+                                         uint64_t* result,
+                                         bool* lossless) {
+  return napi_bigint_not_supported(env);
+}
+
+napi_status napi_get_value_bigint_words(napi_env env,
+                                        napi_value value,
+                                        int* sign_bit,
+                                        size_t* word_count,
+                                        uint64_t* words) {
+  return napi_bigint_not_supported(env);
 }
 
 napi_status napi_add_finalizer(napi_env env,
