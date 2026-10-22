@@ -1,4 +1,5 @@
 #include "js_native_api_quickjs.h"
+#include "js_native_api_shared.h"
 #include <napi/js_native_api.h>
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -1402,27 +1403,19 @@ napi_status napi_get_property_names(napi_env env, napi_value object, napi_value*
   CHECK_ENV(env);
   CHECK_ARG(env, object);
   CHECK_ARG(env, result);
-  
-  JSValue jsObject = ToJSValue(object);
-  
-  JSPropertyEnum* ptab;
-  uint32_t plen;
-  
-  if (JS_GetOwnPropertyNames(env->context, &ptab, &plen, jsObject, 
-      JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
-    return napi_set_last_error(env, napi_generic_failure);
+
+  // `JS_GetOwnPropertyNames` is own-only, so use the shared prototype-chain
+  // walk instead. It is written against the public `napi_*` surface and so
+  // cannot reach `napi_set_last_error`; do it here, since `CHECK_NAPI` only
+  // propagates the status and the preceding call inside the walk will have
+  // cleared the last error. The success path likewise has to clear it, so that
+  // a rejection recorded by an earlier call does not survive as the last error
+  // of a call that succeeded.
+  const napi_status status{napi_shared::GetEnumerablePropertyNames(env, object, result, env->property_name_intrinsics)};
+  if (status != napi_ok) {
+    return napi_set_last_error(env, status);
   }
-  
-  JSValue arr = JS_NewArray(env->context);
-  
-  for (uint32_t i = 0; i < plen; i++) {
-    JSValue name = JS_AtomToString(env->context, ptab[i].atom);
-    JS_SetPropertyUint32(env->context, arr, i, name);
-  }
-  
-  JS_FreePropertyEnum(env->context, ptab, plen);
-  
-  *result = FromJSValue(env, arr);
+
   napi_clear_last_error(env);
   return napi_ok;
 }
@@ -1594,7 +1587,14 @@ napi_status napi_throw(napi_env env, napi_value error) {
   JSContext* targetCtx = env->current_context ? env->current_context : env->context;
   JS_Throw(targetCtx, JS_DupValue(targetCtx, jsError));
   
-  return napi_set_last_error(env, napi_pending_exception);
+  // Returning napi_pending_exception here would report that the throw itself
+  // failed. node-addon-api's Error::ThrowAsJavaScriptException reacts to that by
+  // re-throwing `Error::New(env)`, which clears the exception it just set and
+  // lets the C++ exception escape the callback wrapper. The escaped error is
+  // then stringified by ExternalCallback::Callback after its handle scope is
+  // gone, which reads freed memory.
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw error
@@ -1610,7 +1610,8 @@ napi_status napi_throw_error(napi_env env, const char* code, const char* msg) {
   }
 
   JS_Throw(env->context, error);
-  return napi_set_last_error(env, napi_pending_exception);
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw type error
@@ -1618,7 +1619,8 @@ napi_status napi_throw_type_error(napi_env env, const char* code, const char* ms
   CHECK_ENV(env);
 
   JS_ThrowTypeError(env->context, "%s", msg ? msg : "");
-  return napi_set_last_error(env, napi_pending_exception);
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Throw range error
@@ -1626,7 +1628,8 @@ napi_status napi_throw_range_error(napi_env env, const char* code, const char* m
   CHECK_ENV(env);
 
   JS_ThrowRangeError(env->context, "%s", msg ? msg : "");
-  return napi_set_last_error(env, napi_pending_exception);
+  napi_clear_last_error(env);
+  return napi_ok;
 }
 
 // Create error
@@ -1893,6 +1896,12 @@ napi_status napi_open_handle_scope(napi_env env, napi_handle_scope* result) {
   CHECK_ENV(env);
   CHECK_ARG(env, result);
   
+  // This token is a position in handle_scope_stack, not an identity: scopes opened
+  // with no handle allocated between them get the same value. That is sufficient
+  // here because the token is only ever used to work out where to truncate, and two
+  // closes truncating to the same index is a no-op. Do not key per-scope state on
+  // it -- napi_open_escapable_handle_scope did exactly that and the colliding
+  // scopes shared one entry; it uses a counter for that reason.
   env->current_scope_start = env->handle_scope_stack.size();
   *result = reinterpret_cast<napi_handle_scope>(
     new HandleScopeInfo{env->current_scope_start, false});
@@ -1929,8 +1938,12 @@ napi_status napi_open_escapable_handle_scope(napi_env env, napi_escapable_handle
   CHECK_ARG(env, result);
   
   env->current_scope_start = env->handle_scope_stack.size();
-  *result = reinterpret_cast<napi_escapable_handle_scope>(
-    new HandleScopeInfo{env->current_scope_start, false});
+  
+  // The token is a counter, not a position: scopes opened with no handle allocated
+  // between them share a position and would otherwise be indistinguishable.
+  const size_t token = ++env->next_escapable_scope_token;
+  env->escapable_scopes.emplace(token, napi_env__::EscapableScope{env->current_scope_start, nullptr});
+  *result = reinterpret_cast<napi_escapable_handle_scope>(token);
   
   napi_clear_last_error(env);
   return napi_ok;
@@ -1940,14 +1953,36 @@ napi_status napi_close_escapable_handle_scope(napi_env env, napi_escapable_handl
   CHECK_ENV(env);
   CHECK_ARG(env, scope);
   
-  auto* scopeInfo = reinterpret_cast<HandleScopeInfo*>(scope);
-  size_t scope_start = scopeInfo->start;
+  const auto it = env->escapable_scopes.find(reinterpret_cast<size_t>(scope));
+  if (it == env->escapable_scopes.end()) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+  
+  const size_t scope_start = it->second.scope_start;
+  
+  // A scope closed out of LIFO order would leave scope_start past the end of the
+  // stack, and resize would then grow it with null entries that the next close
+  // dereferences. Node-API forbids that ordering, so report it rather than
+  // corrupting the stack.
+  if (scope_start > env->handle_scope_stack.size()) {
+    return napi_set_last_error(env, napi_handle_scope_mismatch);
+  }
   
   for (size_t i = scope_start; i < env->handle_scope_stack.size(); i++) {
     JS_FreeValue(env->context, *env->handle_scope_stack[i]);
   }
   
   env->handle_scope_stack.resize(scope_start);
+  
+  // The escaped handle, if any, was held aside by napi_escape_handle rather than
+  // stored on the stack. Now that this scope's own handles are gone it can be
+  // pushed on: it lands at scope_start, which belongs to the parent scope, so it
+  // outlives this close and is freed when the parent closes.
+  if (it->second.escaped) {
+    env->handle_scope_stack.push_back(std::move(it->second.escaped));
+  }
+  env->escapable_scopes.erase(it);
+  
   env->current_scope_start = scope_start;
   delete scopeInfo;
   
@@ -1961,32 +1996,23 @@ napi_status napi_escape_handle(napi_env env, napi_escapable_handle_scope scope, 
   CHECK_ARG(env, escapee);
   CHECK_ARG(env, result);
   
-  auto* scopeInfo = reinterpret_cast<HandleScopeInfo*>(scope);
-  if (scopeInfo->escaped) {
+  const auto it = env->escapable_scopes.find(reinterpret_cast<size_t>(scope));
+  if (it == env->escapable_scopes.end()) {
+    return napi_set_last_error(env, napi_invalid_arg);
+  }
+  
+  // Node-API allows napi_escape_handle to be called at most once per scope.
+  if (it->second.escaped) {
     return napi_set_last_error(env, napi_escape_called_twice);
   }
-  size_t scope_start = scopeInfo->start;
   
   // Duplicate the JSValue to create a new handle that will outlive the current scope
-  JSValue jsValue = ToJSValue(escapee);
-  JSValue escapedValue = JS_DupValue(env->context, jsValue);
+  JSValue escapedValue = JS_DupValue(env->context, ToJSValue(escapee));
   
-  // Store the escaped value in the parent scope (before scope_start)
-  auto parentPtr = std::make_unique<JSValue>(escapedValue);
-  napi_value parentHandle = reinterpret_cast<napi_value>(parentPtr.get());
+  auto holder = std::make_unique<JSValue>(escapedValue);
+  *result = reinterpret_cast<napi_value>(holder.get());
+  it->second.escaped = std::move(holder);
   
-  // Insert immediately before the current scope. Advancing this scope's start
-  // keeps close_escapable_handle_scope from releasing the escaped handle; an
-  // enclosing scope will still release it at the correct time. At the root it
-  // remains alive until environment teardown.
-  env->handle_scope_stack.insert(
-    env->handle_scope_stack.begin() + scope_start,
-    std::move(parentPtr));
-  scopeInfo->start++;
-  scopeInfo->escaped = true;
-  env->current_scope_start = scopeInfo->start;
-  
-  *result = parentHandle;
   napi_clear_last_error(env);
   return napi_ok;
 }

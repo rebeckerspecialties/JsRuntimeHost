@@ -2,6 +2,7 @@
 
 #include <napi/napi.h>
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -14,6 +15,11 @@ namespace Babylon::Polyfills::Internal
         static void Initialize(Napi::Env env);
 
         explicit Blob(const Napi::CallbackInfo& info);
+
+        // Synchronous accessors for other polyfills in this repo (URL.createObjectURL). A Blob is
+        // immutable, so the flattened copy stays valid however long the caller keeps it.
+        std::shared_ptr<const std::vector<std::byte>> CopyBytes() const;
+        const std::string& Type() const { return m_type; }
 
     private:
         Napi::Value GetSize(const Napi::CallbackInfo& info);

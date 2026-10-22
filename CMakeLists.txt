@@ -49,7 +49,7 @@ FetchContent_Declare(llhttp
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(UrlLib
     GIT_REPOSITORY https://github.com/BabylonJS/UrlLib.git
-    GIT_TAG e86ffb34e77092266145497681efc74e0a920ffe
+    GIT_TAG 0c991337a1160ba7a2d062bf8e342d0a66f48dc9
     EXCLUDE_FROM_ALL)
 FetchContent_Declare(quickjs-ng
     GIT_REPOSITORY https://github.com/quickjs-ng/quickjs.git
@@ -103,7 +103,7 @@ option(JSRUNTIMEHOST_POLYFILL_SCHEDULING "Include JsRuntimeHost Polyfill Schedul
 option(JSRUNTIMEHOST_POLYFILL_XMLHTTPREQUEST "Include JsRuntimeHost Polyfill XMLHttpRequest." ON)
 option(JSRUNTIMEHOST_POLYFILL_FETCH "Include JsRuntimeHost Polyfill fetch." ON)
 option(JSRUNTIMEHOST_POLYFILL_URL "Include JsRuntimeHost Polyfill URL and URLSearchParams." ON)
-option(JSRUNTIMEHOST_POLYFILL_ABORT_CONTROLLER "Include JsRuntimeHost Polyfills AbortController and AbortSignal." ON)
+option(JSRUNTIMEHOST_POLYFILL_ABORTCONTROLLER "Include JsRuntimeHost Polyfills AbortController and AbortSignal." ON)
 option(JSRUNTIMEHOST_POLYFILL_WEBSOCKET "Include JsRuntimeHost Polyfill WebSocket." ON)
 option(JSRUNTIMEHOST_POLYFILL_BLOB "Include JsRuntimeHost Polyfill Blob." ON)
 option(JSRUNTIMEHOST_POLYFILL_FILE "Include JsRuntimeHost Polyfill File and FileReader." ON)
@@ -113,6 +113,14 @@ option(JSRUNTIMEHOST_POLYFILL_TEXTENCODER "Include JsRuntimeHost Polyfill TextEn
 option(JSRUNTIMEHOST_POLYFILL_WORKER "Include JsRuntimeHost Polyfill Worker." ON)
 option(JSRUNTIMEHOST_POLYFILL_STREAMS "Include JsRuntimeHost Polyfill Web Streams." ON)
 option(JSRUNTIMEHOST_POLYFILL_COMPRESSION "Include JsRuntimeHost Polyfills CompressionStream and DecompressionStream." ON)
+
+# Plugins
+option(JSRUNTIMEHOST_PLUGIN_DYNAMICSCRIPTLOADER "Include JsRuntimeHost asynchronous resource script loader." ON)
+
+# Compatibility with the previous AbortController option.
+if(DEFINED JSRUNTIMEHOST_POLYFILL_ABORT_CONTROLLER)
+    set(JSRUNTIMEHOST_POLYFILL_ABORTCONTROLLER "${JSRUNTIMEHOST_POLYFILL_ABORT_CONTROLLER}")
+endif()
 
 # Sanitizers
 option(ENABLE_SANITIZERS "Enable AddressSanitizer and UBSan" OFF)
@@ -386,6 +394,7 @@ endif()
 
 add_subdirectory(Core)
 add_subdirectory(Polyfills)
+add_subdirectory(Plugins)
 
 if(JSRUNTIMEHOST_TESTS AND NOT WINDOWS_STORE)
     add_subdirectory(Tests)

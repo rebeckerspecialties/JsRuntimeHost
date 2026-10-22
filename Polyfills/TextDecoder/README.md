@@ -31,6 +31,8 @@ const utf16Decoder = new TextDecoder("utf-16le");
 
 const bytes = new Uint8Array([72, 101, 108, 108, 111]);
 decoder.decode(bytes); // "Hello"
+
+new TextDecoder("utf-16le").decode(new Uint8Array([0x48, 0x00, 0x69, 0x00])); // "Hi"
 ```
 
 Passing an unsupported encoding throws:

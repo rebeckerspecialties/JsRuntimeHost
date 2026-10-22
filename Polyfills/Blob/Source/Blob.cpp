@@ -1,4 +1,5 @@
 #include "Blob.h"
+#include <Babylon/Polyfills/BlobInternal.h>
 #include <Babylon/JsRuntime.h>
 #include <Babylon/Polyfills/Blob.h>
 
@@ -540,5 +541,77 @@ namespace Babylon::Polyfills::Blob
     void BABYLON_API Initialize(Napi::Env env)
     {
         Internal::Blob::Initialize(env);
+    }
+}
+
+namespace Babylon::Polyfills::Internal
+{
+    std::shared_ptr<const std::vector<std::byte>> Blob::CopyBytes() const
+    {
+        auto bytes = std::make_shared<std::vector<std::byte>>(m_data->Size);
+        if (m_data->Size > 0)
+        {
+            m_data->CopyTo(0, bytes->data(), m_data->Size);
+        }
+        return bytes;
+    }
+}
+
+namespace Babylon::Polyfills::Blob
+{
+    std::optional<BlobData> BABYLON_API TryGetData(const Napi::Object& object)
+    {
+        const auto env = object.Env();
+        const auto global = env.Global();
+
+        // Verify `object` is a Blob (or a subclass such as File) by walking its prototype chain with
+        // the JS-level Object.getPrototypeOf. napi_get_prototype is not exposed by every adapter
+        // (e.g. JSI) and on JSC returns the raw [[Prototype]], which differs from the JS-visible
+        // prototype of a DefineClass instance; napi_instanceof's wrapper requires a Napi::Function.
+        const auto blobConstructor = global.Get("Blob");
+        if (!blobConstructor.IsFunction())
+        {
+            return std::nullopt;
+        }
+
+        const auto blobPrototype = blobConstructor.As<Napi::Object>().Get("prototype");
+        if (!blobPrototype.IsObject())
+        {
+            return std::nullopt;
+        }
+
+        const auto objectConstructor = global.Get("Object");
+        if (!objectConstructor.IsObject())
+        {
+            return std::nullopt;
+        }
+
+        const auto getPrototypeOf = objectConstructor.As<Napi::Object>().Get("getPrototypeOf");
+        if (!getPrototypeOf.IsFunction())
+        {
+            return std::nullopt;
+        }
+
+        const auto getPrototypeOfFn = getPrototypeOf.As<Napi::Function>();
+
+        bool isBlob = false;
+        Napi::Value current = getPrototypeOfFn.Call({object});
+        while (current.IsObject())
+        {
+            if (current.StrictEquals(blobPrototype))
+            {
+                isBlob = true;
+                break;
+            }
+            current = getPrototypeOfFn.Call({current});
+        }
+
+        if (!isBlob)
+        {
+            return std::nullopt;
+        }
+
+        const auto* blob = Internal::Blob::Unwrap(object);
+        return BlobData{blob->CopyBytes(), blob->Type()};
     }
 }

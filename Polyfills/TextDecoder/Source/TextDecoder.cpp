@@ -191,6 +191,12 @@ namespace
                         }
                     }
                     decoded.push_back(static_cast<char16_t>(0xFFFD));
+                    if (index < data.size() && index + 1 >= data.size())
+                    {
+                        // WHATWG end-of-queue: an unpaired lead surrogate and a leftover odd byte
+                        // are a single error, not one each.
+                        break;
+                    }
                     continue;
                 }
                 if (codeUnit >= static_cast<char16_t>(0xDC00) && codeUnit <= static_cast<char16_t>(0xDFFF))

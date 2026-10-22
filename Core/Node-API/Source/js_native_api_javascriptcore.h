@@ -2,18 +2,26 @@
 
 #include <napi/js_native_api.h>
 #include <napi/js_native_api_types.h>
+#include "js_native_api_shared.h"
 #include <JavaScriptCore/JavaScript.h>
+#include <memory>
 #include <unordered_map>
 #include <list>
 #include <mutex>
 #include <thread>
 #include <cassert>
+#include <map>
+
+struct napi_reference_tracking_state {
+  std::unordered_map<napi_value, std::uintptr_t> active_ref_values{};
+};
 
 struct napi_env__ {
   JSGlobalContextRef context{};
   JSValueRef last_exception{};
   napi_extended_error_info last_error{nullptr, nullptr, 0, napi_ok};
-  std::unordered_map<napi_value, std::uintptr_t> active_ref_values{};
+  napi_shared::PropertyNameIntrinsics property_name_intrinsics{};
+  std::shared_ptr<napi_reference_tracking_state> reference_tracking_state{std::make_shared<napi_reference_tracking_state>()};
   std::list<napi_ref> strong_refs{};
   bool shutting_down{false};
 
@@ -29,6 +37,14 @@ struct napi_env__ {
   JSValueRef function_prototype_call{};
   JSValueRef is_bigint_function{};
   bool bigint_supported{false};
+
+  // Escapable scope bookkeeping: token -> whether that scope has escaped. Values
+  // are rooted by the engine rather than by a scope here, so this exists only to
+  // honour the one-escape-per-scope rule and to reject tokens that are not open.
+  // The token is a monotonic counter, never an index into anything, so two scopes
+  // can never share one.
+  size_t next_escapable_scope_token{0};
+  std::map<size_t, bool> open_escapable_scopes{};
 
   const std::thread::id thread_id{std::this_thread::get_id()};
 

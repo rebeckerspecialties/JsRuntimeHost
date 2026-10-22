@@ -87,6 +87,10 @@ namespace Babylon
         Napi::Detach(env);
     }
 
+    void AppRuntime::ShutdownEnvironment(Napi::Env)
+    {
+    }
+
     void AppRuntime::DrainMicrotasks(Napi::Env)
     {
         // JavaScriptCore drains Promise jobs at script boundaries, but Apple

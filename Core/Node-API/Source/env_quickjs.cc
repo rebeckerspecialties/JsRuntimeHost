@@ -1,5 +1,6 @@
 #include <napi/env.h>
 #include "js_native_api_quickjs.h"
+#include <memory>
 #include <stdexcept>
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -14,7 +15,7 @@ namespace Napi
 {
     Env Attach(JSContext* context)
     {
-        napi_env env_ptr{new napi_env__};
+        auto env_ptr{std::make_unique<napi_env__>()};
         env_ptr->context = context;
         env_ptr->current_context = env_ptr->context;
 
@@ -29,7 +30,6 @@ namespace Napi
         if (JS_IsException(object) || !JS_IsObject(object))
         {
             JS_FreeValue(context, object);
-            delete env_ptr;
             throw std::runtime_error{"Napi::Attach: failed to resolve the global 'Object' constructor"};
         }
 
@@ -42,7 +42,6 @@ namespace Napi
         if (JS_IsException(prototype) || !JS_IsObject(prototype))
         {
             JS_FreeValue(context, prototype);
-            delete env_ptr;
             throw std::runtime_error{"Napi::Attach: failed to resolve Object.prototype"};
         }
 
@@ -51,13 +50,17 @@ namespace Napi
         if (JS_IsException(hasOwnProperty) || !JS_IsFunction(context, hasOwnProperty))
         {
             JS_FreeValue(context, hasOwnProperty);
-            delete env_ptr;
             throw std::runtime_error{"Napi::Attach: failed to resolve Object.prototype.hasOwnProperty"};
         }
 
         env_ptr->has_own_property_function = hasOwnProperty;
+        if (napi_shared::CapturePropertyNameIntrinsics(env_ptr.get(), env_ptr->property_name_intrinsics) != napi_ok)
+        {
+            JS_FreeValue(context, hasOwnProperty);
+            throw std::runtime_error{"Napi::Attach: failed to capture property-name intrinsics"};
+        }
 
-        return {env_ptr};
+        return {env_ptr.release()};
     }
 
     void Detach(Env env)
@@ -79,6 +82,10 @@ namespace Napi
                 finalize(env_ptr, data, hint);
             }
 
+            if (napi_shared::ReleasePropertyNameIntrinsics(env_ptr, env_ptr->property_name_intrinsics) != napi_ok)
+            {
+                throw std::runtime_error{"Napi::Detach: failed to release property-name intrinsics"};
+            }
             // Release every strong napi_ref still outstanding. This mirrors
             // the V8 impl (napi_env__::DeleteMe) and is essential on QuickJS:
             // any surviving strong ref pins a JS value from outside the GC
@@ -127,6 +134,17 @@ namespace Napi
                 JS_FreeValue(env_ptr->context, *ptr);
             }
             env_ptr->handle_scope_stack.clear();
+
+            // Handles escaped from scopes that were never closed are held aside
+            // rather than on the stack, so free them here too.
+            for (auto& entry : env_ptr->escapable_scopes)
+            {
+                if (entry.second.escaped)
+                {
+                    JS_FreeValue(env_ptr->context, *entry.second.escaped);
+                }
+            }
+            env_ptr->escapable_scopes.clear();
 
             // Run the cycle collector so napi_wrap finalizers (which
             // destroy C++ wrapper objects and release any embedded
