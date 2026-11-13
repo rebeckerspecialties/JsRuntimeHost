@@ -90,6 +90,8 @@ if(NAPI_BUILD_ABI)
                         "Bun's pinned Android WebKit archives target API 28; set Android minSdkVersion to 28 or newer")
                 endif()
 
+                # Bun does not publish Android LTO archives. These are its optimized native
+                # arm64 and x86_64 builds; the full-LTO variants are Linux-only.
                 if(ANDROID_ABI STREQUAL "arm64-v8a")
                     set(JSR_BUN_JSC_ASSET "bun-webkit-linux-arm64-android.tar.gz")
                     set(JSR_BUN_JSC_SHA256 "63c18a18c89dc3e1c0a93107f95290c27fbe310eb90e30dc197a7936804d034b")
@@ -119,6 +121,18 @@ if(NAPI_BUILD_ABI)
                    NOT CMAKE_CXX_COMPILER_VERSION MATCHES "^21\\.")
                     message(FATAL_ERROR
                         "Bun's Linux JavaScriptCore LTO archives require Clang 21")
+                endif()
+
+                set(JSR_BUN_JSC_SAVED_CXX_STANDARD "${CMAKE_CXX_STANDARD}")
+                set(CMAKE_CXX_STANDARD 23)
+                check_cxx_source_compiles([=[
+                    #include <expected>
+                    int main() { std::expected<int, int> value{1}; return *value - 1; }
+                ]=] JSR_BUN_JSC_HAS_STD_EXPECTED)
+                set(CMAKE_CXX_STANDARD "${JSR_BUN_JSC_SAVED_CXX_STANDARD}")
+                if(NOT JSR_BUN_JSC_HAS_STD_EXPECTED)
+                    message(FATAL_ERROR
+                        "Bun's current WebKit headers require a C++23 standard library with <expected> (install libstdc++-12-dev on Ubuntu 22.04)")
                 endif()
 
                 find_program(JSR_BUN_JSC_LLD NAMES ld.lld-21 ld.lld REQUIRED)

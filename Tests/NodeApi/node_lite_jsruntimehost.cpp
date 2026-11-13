@@ -75,14 +75,31 @@ class JsRuntimeHostEnvHolder : public IEnvHolder {
       }
 
       if (context_ != nullptr) {
+#if defined(JSR_USE_BUN_JSC)
+        {
+          // Bun's C API expects the embedder to hold the VM lock while releasing the host's
+          // context reference. End the holder before Detach so last-chance finalizers still have
+          // a live napi_env.
+          Napi::ContextLock contextLock{napiEnv};
+          JSGlobalContextRelease(context_);
+        }
+#else
         JSGlobalContextRelease(context_);
+#endif
         context_ = nullptr;
       }
 
       Napi::Detach(napiEnv);
       env_ = nullptr;
     } else if (context_ != nullptr) {
+#if defined(JSR_USE_BUN_JSC)
+      {
+        JSCBunContextLock contextLock{context_};
+        JSGlobalContextRelease(context_);
+      }
+#else
       JSGlobalContextRelease(context_);
+#endif
       context_ = nullptr;
     }
 #elif defined(JSR_NAPI_ENGINE_V8)

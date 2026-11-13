@@ -25,10 +25,8 @@ set(JSR_NODE_API_NATIVE_TEST_DIRS
 if(NOT NAPI_JAVASCRIPT_ENGINE STREQUAL "JSI")
     list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_instance_data)
     # BigInt: the real conformance test where the engine has BigInt; an ENOTSUP feature-detection
-    # fallback where it doesn't -- the Win10 OS Chakra, and jsc-android (~2020), whose parser rejects
-    # `0n` literals so the standard test_bigint can't even be parsed there.
-    if(NAPI_JAVASCRIPT_ENGINE STREQUAL "Chakra" OR
-       (NAPI_JAVASCRIPT_ENGINE STREQUAL "JavaScriptCore" AND ANDROID))
+    # fallback for the Win10 OS Chakra engine. The Bun Android JSC build supports BigInt.
+    if(NAPI_JAVASCRIPT_ENGINE STREQUAL "Chakra")
         list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_bigint_unsupported)
     else()
         list(APPEND JSR_NODE_API_NATIVE_TEST_DIRS test_bigint)
@@ -91,6 +89,12 @@ target_link_libraries(node_lite
     PRIVATE
         napi
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Linux .node modules intentionally leave their napi_* imports unresolved and bind them to the
+    # host at dlopen time, matching Node. Export node_lite's statically linked implementation.
+    set_target_properties(node_lite PROPERTIES ENABLE_EXPORTS ON)
+endif()
 
 node_api_copy_test_sources(node_lite)
 

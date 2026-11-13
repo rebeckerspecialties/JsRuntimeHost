@@ -30,8 +30,7 @@ napi_status jsr_open_napi_env_scope(napi_env env,
   // node_lite calls Node-API outside any napi callback, so V8 has no *current context*. The env
   // holder already holds a Locker + Isolate::Scope; enter the env's context here (exited in
   // jsr_close_napi_env_scope) so calls such as napi_create_object -> v8::Object::New(isolate),
-  // which use the isolate's current context, don't segfault. (On JSC this scope is a no-op -- the
-  // env carries its context explicitly.)
+  // which use the isolate's current context, don't segfault.
   if (env != nullptr) {
     v8::Isolate* isolate = env->isolate;
     v8::HandleScope handle_scope(isolate);
